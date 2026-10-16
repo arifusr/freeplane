@@ -5,6 +5,10 @@
 export const SPACE_AROUND = 50; // NodeView.SPACE_AROUND
 export const VGAP = 3;          // NodeAdapter.VGAP
 export const HGAP = 20;         // NodeAdapter.HGAP
+export const SHIFT = -2;        // NodeAdapter.SHIFT (single visible child)
+export const HANDLE_W = 10;     // NodeViewLayoutAdapter.LISTENER_VIEW_WIDTH
+export const ICON_SIZE = 16;    // ukuran ikon BUILTIN (MultipleImage)
+export const FOLD_SYMBOL = 8;   // NodeView.getFoldingSymbolWidth() default
 export const EDGE_XCTRL = 12;   // BezierEdgeView.XCTRL
 export const EDGE_CHILD_XCTRL = 20; // BezierEdgeView.CHILD_XCTRL
 
@@ -272,26 +276,37 @@ function measureBBox(node) {
   const m = measureFn(node);
   node._w = m.w; node._h = m.h;
   for (const c of node.children) measureBBox(c);
-  const rh = subtreeHeight(node._right, node.vGap);
-  const lh = subtreeHeight(node._left, node.vGap);
-  const rw = node._right.length ? Math.max(...node._right.map((c) => c._bw)) : 0;
-  const lw = node._left.length ? Math.max(...node._left.map((c) => c._bw)) : 0;
-  node._bw = (lw ? lw + node.hGap : 0) + node._w + (rw ? node.hGap + rw : 0);
+  // Node terlipat menyembunyikan seluruh subtree-nya: anak tidak menyumbang
+  // ukuran (jadi sibling menggantikan ruangnya), sesuai perilaku FreeMind.
+  const open = !node.folded;
+  const rh = open ? subtreeHeight(node._right, node.vGap) : 0;
+  const lh = open ? subtreeHeight(node._left, node.vGap) : 0;
+  // HGap milik anak (jarak anak dari induk), sesuai NodeViewLayoutAdapter.getChildHorizontalShift.
+  const rExt = open && node._right.length ? Math.max(...node._right.map((c) => c.hGap + c._bw)) : 0;
+  const lExt = open && node._left.length ? Math.max(...node._left.map((c) => c.hGap + c._bw)) : 0;
+  node._bw = lExt + node._w + rExt;
   node._bh = Math.max(node._h, rh, lh);
-  node._cx = lw ? lw + node.hGap : 0;
+  node._cx = lExt;
   node._cy = (node._bh - node._h) / 2;
 }
 
+// NodeAdapter.calcShiftY(): shiftY + SHIFT bila induk punya tepat satu anak terlihat.
+function calcShiftY(c) {
+  const p = c._parent;
+  return c.shiftY + (p && p.children.length === 1 ? SHIFT : 0);
+}
+
 function place(node) {
+  if (node.folded) return; // subtree tersembunyi tidak ditempatkan
   for (const side of ['right', 'left']) {
     const list = node[`_${side}`];
     const total = subtreeHeight(list, node.vGap);
     let y = node._contentY + node._h / 2 - total / 2;
     for (const c of list) {
-      y += c.shiftY;
+      y += calcShiftY(c);
       const bx = side === 'right'
-        ? node._contentX + node._w + node.hGap
-        : node._contentX - node.hGap - c._bw;
+        ? node._contentX + node._w + c.hGap
+        : node._contentX - c.hGap - c._bw;
       c._contentX = bx + c._cx;
       c._contentY = y + c._cy;
       place(c);
@@ -320,13 +335,27 @@ export function buildIndex(root) {
 }
 
 export function render(ctx, root, opts = {}) {
-  const sel = opts.selectedNode;
   walk(root, (n) => {}, null);
   const index = buildIndex(root);
-  walk(root, (node) => drawCloud(ctx, node));
-  walk(root, (node) => { if (node._parent && !node._parent.folded) drawEdge(ctx, node._parent, node); });
-  walk(root, (node) => drawNode(ctx, node, sel, root));
-  walk(root, (node) => { if (!node.folded) drawArrowLinks(ctx, node, index, opts.scale || 1); });
+  const vis = new Set(visibleNodes(root));
+  walk(root, (node) => { if (vis.has(node)) drawCloud(ctx, node); });
+  walk(root, (node) => { if (vis.has(node) && node._parent) drawEdge(ctx, node._parent, node); });
+  walk(root, (node) => { if (vis.has(node)) drawNode(ctx, node, opts, root); });
+  walk(root, (node) => { if (vis.has(node) && !node.folded) drawArrowLinks(ctx, node, index, opts.scale || 1, vis); });
+}
+
+// Gambar subtree `node` yang diterjemahkan (tx,ty) — untuk ghost saat drag.
+export function renderSubtreeAt(ctx, node, tx, ty, opts = {}) {
+  const nodes = subtreeNodes(node);
+  const set = new Set(nodes);
+  const root = opts.root || node;
+  ctx.save();
+  ctx.globalAlpha = opts.alpha ?? 0.75;
+  ctx.translate(tx, ty);
+  for (const n of nodes) drawCloud(ctx, n);
+  for (const n of nodes) if (n._parent && set.has(n._parent)) drawEdge(ctx, n._parent, n);
+  for (const n of nodes) drawNode(ctx, n, opts, root);
+  ctx.restore();
 }
 
 function walk(node, fn, parent) {
@@ -341,26 +370,47 @@ function drawEdge(ctx, parent, node) {
   const sign = node._side === 'left' ? -1 : 1;
   const model = node.edge || { style: 'bezier', color: null, width: 1 };
   const style = model.style || 'bezier';
+  const color = model.color || parent.edge?.color || '#606060';
+  const lw = model.width || 1;
   ctx.save();
-  ctx.strokeStyle = model.color || parent.edge?.color || '#606060';
-  ctx.lineWidth = model.width || 1;
-  ctx.beginPath();
-  ctx.moveTo(s.x, s.y);
-  if (style.includes('bezier')) {
-    const sx = parent._parent ? sign : 0;
-    ctx.bezierCurveTo(s.x + sx * EDGE_XCTRL, s.y, e.x - sign * EDGE_CHILD_XCTRL, e.y, e.x, e.y);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lw;
+  if (style === 'linear') {
+    // LinearEdgeView
+    ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+  } else if (style === 'sharp_linear') {
+    // SharpLinearEdgeView: baji segitiga
+    const w = lw / 2 + 1;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y + w); ctx.lineTo(e.x, e.y); ctx.lineTo(s.x, s.y - w);
+    ctx.closePath(); ctx.fill();
+  } else if (style === 'sharp_bezier') {
+    // SharpBezierEdgeView: bentuk tetes dari dua kurva
+    const one = { x: s.x + sign * EDGE_XCTRL, y: s.y };
+    const two = { x: e.x - sign * EDGE_XCTRL, y: e.y };
+    const w2 = (lw / 2 + 1) / 2;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.bezierCurveTo(one.x, one.y, two.x, two.y - w2, e.x, e.y);
+    ctx.bezierCurveTo(two.x, two.y + w2, one.x, one.y, s.x, s.y);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
   } else {
-    ctx.lineTo(e.x, e.y);
+    // BezierEdgeView
+    const sx = parent._parent ? sign : 0;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.bezierCurveTo(s.x + sx * EDGE_XCTRL, s.y, e.x - sign * EDGE_CHILD_XCTRL, e.y, e.x, e.y);
+    ctx.stroke();
   }
-  ctx.stroke();
   ctx.restore();
 }
 
-function drawArrowLinks(ctx, node, index, scale = 1) {
+function drawArrowLinks(ctx, node, index, scale = 1, vis = null) {
   const len = 8 / (scale || 1);
   for (const al of node.arrowlinks) {
     const target = index.get(al.destination);
-    if (!target) continue;
+    if (!target || (vis && !vis.has(target))) continue;
     const s = outPoint(node);
     const e = inPoint(target);
     const sSign = node._side === 'left' ? -1 : 1;
@@ -452,46 +502,130 @@ function drawCloud(ctx, node) {
   ctx.restore();
 }
 
+// Gaya node mengikuti NodeAdapter.getStyle(): root pakai standardrootnodestyle,
+// node lain pakai standardnodestyle; 'as_parent' mewarisi induk; 'combined'
+// jadi bubble saat folded, fork saat terbuka.
+const STANDARD_NODE_STYLE = 'fork';
+const STANDARD_ROOT_NODE_STYLE = 'bubble';
+
 function resolvedStyle(node, root) {
+  if (node === root) return STANDARD_ROOT_NODE_STYLE;
   let st = node.style;
-  if (st === 'as_parent' || st == null) st = node === root ? 'bubble' : (node._parent ? resolvedStyle(node._parent, root) : 'fork');
+  if (st == null) st = STANDARD_NODE_STYLE;
+  else if (st === 'as_parent') st = resolvedStyle(node._parent, root);
   if (st === 'combined') st = node.folded ? 'bubble' : 'fork';
-  return st || 'fork';
+  return st === 'bubble' ? 'bubble' : 'fork';
 }
 
-function drawNode(ctx, node, sel, root) {
+// NodeAdapter font: NAME/SIZE/BOLD/ITALIC/UNDERLINE.
+export function fontString(node) {
+  const f = node.font || {};
+  const size = f.size || 14;
+  const style = `${f.italic ? 'italic ' : ''}${f.bold ? 'bold ' : ''}`;
+  const fam = f.name || 'sans-serif';
+  return `${style}${size}px ${fam}`;
+}
+
+// Ikon node ala NodeView.updateIcons: stateIcon(catatan) → ikon BUILTIN → ikon link.
+// executableByExtension (Tools.java): ekstensi {exe,com,vbs,bat,lnk}; getExtension = teks setelah '.' terakhir.
+const EXECUTABLE_EXT = new Set(['exe', 'com', 'vbs', 'bat', 'lnk']);
+function extensionOf(s) {
+  const i = s.lastIndexOf('.');
+  return i > 0 && i < s.length - 1 ? s.slice(i + 1).toLowerCase().trim() : '';
+}
+function linkIconKey(link) {
+  if (!link) return null;
+  if (link.startsWith('#')) return 'LinkLocal';
+  if (link.startsWith('mailto:')) return 'Mail';
+  if (EXECUTABLE_EXT.has(extensionOf(link))) return 'Executable';
+  return 'Link';
+}
+
+export function iconKeys(node) {
+  const out = [];
+  if (node.note) out.push('knotes');
+  for (const ic of node.icons) out.push(ic);
+  const li = linkIconKey(node.link);
+  if (li) out.push(li);
+  return out;
+}
+
+export function iconRowWidth(node) { return iconKeys(node).length * ICON_SIZE; }
+
+function drawNode(ctx, node, opts, root) {
   const x = node._contentX, y = node._contentY, w = node._w, h = node._h;
   const style = node === root ? 'root' : resolvedStyle(node, root);
+  const sel = opts.selectedNode === node || (opts.selection && opts.selection.has(node));
   ctx.save();
-  ctx.font = `${node.font?.bold ? 'bold ' : ''}${node.font?.italic ? 'italic ' : ''}14px sans-serif`;
+  ctx.font = fontString(node);
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
   if (style === 'root') {
-    ctx.fillStyle = node.bg || (sel === node ? '#cfe3ff' : '#eef2f7');
+    ctx.fillStyle = node.bg || (sel ? '#cfe3ff' : '#eef2f7');
     ctx.strokeStyle = '#808080';
     ctx.beginPath();
     ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
     ctx.fill(); ctx.stroke();
   } else if (style === 'bubble') {
-    ctx.fillStyle = node.bg || (sel === node ? '#cfe3ff' : '#ffffff');
+    ctx.fillStyle = node.bg || (sel ? '#cfe3ff' : '#ffffff');
     ctx.strokeStyle = node.color || '#404040';
     roundRect(ctx, x, y, w, h, 10); ctx.fill(); ctx.stroke();
   } else {
     if (node.bg) { ctx.fillStyle = node.bg; ctx.fillRect(x, y, w, h); }
+    if (sel) {
+      ctx.fillStyle = '#cfe3ff';
+      roundRect(ctx, x - 4, y - 1, w + 8, h + 2, 5); ctx.fill();
+    }
     ctx.strokeStyle = node.color || '#404040';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x + w, y + h); ctx.stroke();
   }
+
+  // Teks + ikon dalam satu baris; ikon di sisi menjauh dari root
+  // (NodeView.updateIconPosition: LEADING utk kiri, TRAILING utk kanan).
+  const keys = iconKeys(node);
+  const iconW = keys.length * ICON_SIZE;
+  const textX = node._side === 'left' ? x + iconW + (w - iconW) / 2 : x + (w - iconW) / 2;
   ctx.fillStyle = node.color || '#101010';
-  ctx.fillText(node.text, x + w / 2, y + h / 2);
-  if (node.folded && node.children.length) {
-    ctx.fillStyle = '#404040';
-    ctx.beginPath();
-    ctx.arc(node._side === 'left' ? x : x + w, y + h / 2, 4, 0, Math.PI * 2);
-    ctx.fill();
+  ctx.fillText(node.text, textX, y + h / 2);
+  if (node.font?.underline) {
+    const tw = ctx.measureText(node.text).width;
+    const uy = y + h / 2 + (node.font.size || 14) * 0.55;
+    ctx.strokeStyle = node.color || '#101010';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(textX - tw / 2, uy); ctx.lineTo(textX + tw / 2, uy); ctx.stroke();
   }
+  if (opts.images && iconW) {
+    let cx = node._side === 'left' ? x : x + w - iconW;
+    const iy = y + (h - ICON_SIZE) / 2;
+    for (const k of keys) {
+      const img = opts.images.get(k);
+      if (img && img.complete && img.naturalWidth) ctx.drawImage(img, cx, iy, ICON_SIZE, ICON_SIZE);
+      cx += ICON_SIZE;
+    }
+  }
+  if (node.children.length) drawFoldIndicator(ctx, node);
   ctx.restore();
 }
+
+// NodeFoldingComponent: lingkaran kecil di titik-keluar node, garis horizontal
+// selalu, garis vertikal saat folded.
+function drawFoldIndicator(ctx, node) {
+  const p = outPoint(node);
+  const r = FOLD_SYMBOL / 2;
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = node.edge?.color || '#606060';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(p.x - r, p.y); ctx.lineTo(p.x + r, p.y);
+  if (node.folded) { ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x, p.y + r); }
+  ctx.stroke();
+  ctx.restore();
+}
+
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -513,12 +647,17 @@ export function visibleNodes(root) {
   return out;
 }
 
+export const HIT_MARGIN = 4;
+
 export function hitTest(root, px, py) {
-  let best = null;
+  let best = null, bestArea = Infinity;
   for (const n of visibleNodes(root)) {
-    const x = n._contentX - SPACE_AROUND, y = n._contentY - SPACE_AROUND;
-    const w = n._w + SPACE_AROUND * 2, h = n._h + SPACE_AROUND * 2;
-    if (px >= x && px <= x + w && py >= y && py <= y + h) best = n;
+    const x = n._contentX - HIT_MARGIN, y = n._contentY - HIT_MARGIN;
+    const w = n._w + HIT_MARGIN * 2, h = n._h + HIT_MARGIN * 2;
+    if (px >= x && px <= x + w && py >= y && py <= y + h) {
+      const area = n._w * n._h;
+      if (area < bestArea) { bestArea = area; best = n; }
+    }
   }
   return best;
 }
@@ -530,6 +669,99 @@ export function boundingBox(root) {
     maxX = Math.max(maxX, n._contentX + n._w); maxY = Math.max(maxY, n._contentY + n._h);
   }
   return { minX, minY, maxX, maxY };
+}
+
+// Penanda lipat (NodeFoldingComponent) di titik-keluar node.
+export function hitFold(root, px, py) {
+  const r = FOLD_SYMBOL / 2 + 2;
+  for (const n of visibleNodes(root)) {
+    if (!n.children.length) continue;
+    const p = outPoint(n);
+    if ((px - p.x) ** 2 + (py - p.y) ** 2 <= r * r) return n;
+  }
+  return null;
+}
+
+// Node yang punya LINK dan memuat titik (untuk kursor tangan / Ctrl+klik).
+export function hitLink(root, px, py) {
+  let best = null, bestArea = Infinity;
+  for (const n of visibleNodes(root)) {
+    if (!n.link) continue;
+    const x = n._contentX - HIT_MARGIN, y = n._contentY - HIT_MARGIN;
+    const w = n._w + HIT_MARGIN * 2, h = n._h + HIT_MARGIN * 2;
+    if (px >= x && px <= x + w && py >= y && py <= y + h) {
+      const area = n._w * n._h;
+      if (area < bestArea) { bestArea = area; best = n; }
+    }
+  }
+  return best;
+}
+
+export function foldAll(root, folded) {
+  (function rec(n) { if (n.children.length) n.folded = !!folded; for (const c of n.children) rec(c); })(root);
+}
+
+// Klon subtree (hanya model; tanpa field runtime _parent/_contentX/…).
+export function cloneSubtree(node) {
+  const copy = createNode(node.text);
+  copy.folded = node.folded;
+  copy.position = node.position;
+  copy.style = node.style;
+  copy.color = node.color;
+  copy.bg = node.bg;
+  copy.id = node.id || null;
+  copy.link = node.link || null;
+  copy.edge = node.edge ? { ...node.edge } : null;
+  copy.font = node.font ? { ...node.font } : null;
+  copy.icons = node.icons.slice();
+  copy.rich = node.rich;
+  copy.note = node.note;
+  copy.cloud = node.cloud ? { ...node.cloud } : null;
+  copy.arrowlinks = node.arrowlinks.map((a) => ({ ...a }));
+  copy.attrs = node.attrs.map((a) => ({ ...a }));
+  copy.hGap = node.hGap;
+  copy.vGap = node.vGap;
+  copy.shiftY = node.shiftY;
+  copy.children = node.children.map(cloneSubtree);
+  return copy;
+}
+
+// ---------------------------------------------------------------------------
+// Node motion (NodeMotionListenerView / MindMapNodeMotionListener): pegangan
+// oval di sisi-dalam node untuk memindah koordinat relatif (HGAP, VSHIFT).
+// ---------------------------------------------------------------------------
+export function handleRect(node) {
+  const y = node._contentY, h = node._h;
+  if (node._side === 'left') return { x: node._contentX + node._w, y, w: HANDLE_W, h };
+  return { x: node._contentX - HANDLE_W, y, w: HANDLE_W, h };
+}
+
+export function hitHandle(root, px, py) {
+  let best = null, bestH = Infinity;
+  for (const n of visibleNodes(root)) {
+    if (!n._parent) continue; // root tak punya pegangan
+    const r = handleRect(n);
+    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
+      if (r.h < bestH) { bestH = r.h; best = n; }
+    }
+  }
+  return best;
+}
+
+// Oval pegangan; merah bila HGap <= 0 (NodeMotionListenerView.paintComponent).
+export function drawHandle(ctx, node) {
+  const r = handleRect(node);
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.globalAlpha = 0.85;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = node.hGap <= 0 ? '#ff0000' : '#000000';
+  ctx.stroke();
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -565,13 +797,14 @@ function arrowHeadPoints(x, y, ang, len) {
 export function renderSVG(root, opts = {}) {
   walk(root, () => {}, null);
   const index = buildIndex(root);
+  const vis = new Set(visibleNodes(root));
   const bb = boundingBox(root);
   const pad = opts.pad ?? SPACE_AROUND;
   const W = bb.maxX - bb.minX + 2 * pad, H = bb.maxY - bb.minY + 2 * pad;
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bb.minX - pad} ${bb.minY - pad} ${W} ${H}" font-family="sans-serif" font-size="14">`];
 
   walk(root, (n) => {
-    if (!n.cloud || n.folded) return;
+    if (!vis.has(n) || !n.cloud || n.folded) return;
     const pts = [];
     for (const x of subtreeNodes(n)) {
       const px = x._contentX, py = x._contentY, w = x._w, h = x._h;
@@ -584,23 +817,32 @@ export function renderSVG(root, opts = {}) {
   });
 
   walk(root, (n) => {
-    if (!n._parent || n._parent.folded) return;
+    if (!vis.has(n) || !n._parent) return;
     const parent = n._parent;
     const s = outPoint(parent), e = inPoint(n);
     const sign = n._side === 'left' ? -1 : 1;
     const m = n.edge || { style: 'bezier', color: null, width: 1 };
     const stroke = m.color || parent.edge?.color || '#606060';
-    const d = (m.style || 'bezier').includes('bezier')
-      ? (() => { const sx = parent._parent ? sign : 0; return `M ${s.x} ${s.y} C ${s.x + sx * EDGE_XCTRL} ${s.y} ${e.x - sign * EDGE_CHILD_XCTRL} ${e.y} ${e.x} ${e.y}`; })()
-      : `M ${s.x} ${s.y} L ${e.x} ${e.y}`;
-    out.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${m.width || 1}"/>`);
+    const st = m.style || 'bezier';
+    const sx = parent._parent ? sign : 0;
+    let d;
+    if (st === 'linear') d = `M ${s.x} ${s.y} L ${e.x} ${e.y}`;
+    else if (st === 'sharp_linear') {
+      const w = (m.width || 1) / 2 + 1;
+      d = `M ${s.x} ${s.y + w} L ${e.x} ${e.y} L ${s.x} ${s.y - w} Z`;
+    } else if (st === 'sharp_bezier') {
+      const w2 = ((m.width || 1) / 2 + 1) / 2;
+      const one = { x: s.x + sign * EDGE_XCTRL, y: s.y }, two = { x: e.x - sign * EDGE_XCTRL, y: e.y };
+      d = `M ${s.x} ${s.y} C ${one.x} ${one.y} ${two.x} ${two.y - w2} ${e.x} ${e.y} C ${two.x} ${two.y + w2} ${one.x} ${one.y} ${s.x} ${s.y} Z`;
+    } else d = `M ${s.x} ${s.y} C ${s.x + sx * EDGE_XCTRL} ${s.y} ${e.x - sign * EDGE_CHILD_XCTRL} ${e.y} ${e.x} ${e.y}`;
+    out.push(`<path d="${d}" fill="${st.startsWith('sharp') ? stroke : 'none'}" stroke="${stroke}" stroke-width="${m.width || 1}"/>`);
   });
 
   walk(root, (n) => {
-    if (n.folded) return;
+    if (!vis.has(n) || n.folded) return;
     for (const al of n.arrowlinks) {
       const target = index.get(al.destination);
-      if (!target) continue;
+      if (!target || !vis.has(target)) continue;
       const s = outPoint(n), e = inPoint(target);
       const sSign = n._side === 'left' ? -1 : 1;
       const tSign = target._side === 'left' ? -1 : 1;
@@ -617,6 +859,7 @@ export function renderSVG(root, opts = {}) {
   });
 
   walk(root, (n) => {
+    if (!vis.has(n)) return;
     const x = n._contentX, y = n._contentY, w = n._w, h = n._h;
     const style = n === root ? 'root' : resolvedStyle(n, root);
     const sel = opts.selectedNode === n;
@@ -625,11 +868,27 @@ export function renderSVG(root, opts = {}) {
     } else if (style === 'bubble') {
       out.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" ry="10" fill="${n.bg || (sel ? '#cfe3ff' : '#ffffff')}" stroke="${n.color || '#404040'}"/>`);
     } else {
+      if (sel) out.push(`<rect x="${x - 4}" y="${y - 1}" width="${w + 8}" height="${h + 2}" rx="5" fill="#cfe3ff"/>`);
       out.push(`<line x1="${x}" y1="${y + h}" x2="${x + w}" y2="${y + h}" stroke="${n.color || '#404040'}"/>`);
     }
     const fw = n.font?.bold ? ' font-weight="bold"' : '';
     const fs = n.font?.italic ? ' font-style="italic"' : '';
-    out.push(`<text x="${x + w / 2}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}>${escXml(n.text)}</text>`);
+    const fz = n.font?.size ? ` font-size="${n.font.size}"` : '';
+    const keys = iconKeys(n);
+    const iconW = keys.length * ICON_SIZE;
+    const textX = n._side === 'left' ? x + iconW + (w - iconW) / 2 : x + (w - iconW) / 2;
+    out.push(`<text x="${textX}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(n.text)}</text>`);
+    let cx = n._side === 'left' ? x : x + w - iconW;
+    for (const k of keys) {
+      out.push(`<image href="icons/${k}.png" x="${cx}" y="${y + (h - ICON_SIZE) / 2}" width="${ICON_SIZE}" height="${ICON_SIZE}"/>`);
+      cx += ICON_SIZE;
+    }
+    if (n.children.length) {
+      const p = outPoint(n), r = FOLD_SYMBOL / 2;
+      out.push(`<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="#ffffff" stroke="${n.edge?.color || '#606060'}"/>`);
+      out.push(`<line x1="${p.x - r}" y1="${p.y}" x2="${p.x + r}" y2="${p.y}" stroke="${n.edge?.color || '#606060'}"/>`);
+      if (n.folded) out.push(`<line x1="${p.x}" y1="${p.y - r}" x2="${p.x}" y2="${p.y + r}" stroke="${n.edge?.color || '#606060'}"/>`);
+    }
   });
 
   out.push('</svg>');

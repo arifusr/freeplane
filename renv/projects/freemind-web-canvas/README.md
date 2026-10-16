@@ -5,7 +5,8 @@ dari riset source FreeMind commit `a3674b0`. Tanpa backend.
 
 ## Isi
 - `src/freemind-core.mjs` — model node, parser/emitter `.mm` (raw richcontent), layout, renderer Canvas 2D + **renderer SVG headless** (`renderSVG`), hit-test.
-- `src/index.html` — demo interaktif (pan/zoom/select/edit/add/delete/fold/undo-redo, impor/ekspor `.mm`, drag node: jadi anak / sisip sebelum-sesudah sibling).
+- `src/index.html` — demo interaktif: pan/zoom/select/edit/add/delete/fold/undo-redo, impor/ekspor `.mm`, **node motion** (oland tepi = Hgap/Vshift, Ctrl = jarak saudara, dobel-klik reset), **drag-drop** dengan ghost (drop: tengah = anak / tepi-dalam menghadap root = sisip sebelum sibling), **multi-select** (Shift+klik, Shift+seret latar = kotak seleksi), **clipboard** (Ctrl+C/X/V/D), **pencarian** (Ctrl+F, F3 / Shift+F3), **hyperlink** (Ctrl+klik buka), **ikon node** + penanda catatan/link, klik lingkaran tepi = fold, tombol Fold all / Unfold all, gaya edge & font lengkap; input Pointer Events + pan sentuh & pinch-zoom, `touch-action:none`.
+- `src/icons/` — 79 ikon BUILTIN FreeMind (disalin dari `freemind/images/` + `images/icons/`; urutan ikon & ikon link mengikuti `NodeView.updateIcons`).
 - `src/sample.mm` — contoh peta.
 - `test/roundtrip.mjs` — uji round-trip parser/emitter + sanity layout atas contoh dan 25 file `.mm` asli FreeMind.
 - `test/render_svg.mjs` — render contoh ke `mindmap.svg` (artefak headless).
@@ -26,9 +27,23 @@ python3 -m http.server 8000             # lalu buka src/index.html
 | `createNode`/field | `NodeAdapter.java` |
 | `parseMM`/`serializeMM` | `XMLElementAdapter.java`, `NodeAdapter.save` |
 | `layout` | `NodeViewLayoutAdapter.java`, `Left/RightNodeViewLayout`, `VerticalRootNodeViewLayout` |
-| `render` bentuk/edge | `Fork/Bubble/RootMainView`, `BezierEdgeView` |
+| `render` bentuk/edge | `Fork/Bubble/RootMainView`, `Linear/Bezier/SharpLinear/SharpBezierEdgeView` |
+| node motion (Hgap/Vshift) | `NodeMotionListenerView`, `MindMapNodeMotionListener` |
+| ikon & fold indicator | `NodeView.updateIcons`, `MultipleImage`, `NodeFoldingComponent` |
+| clipboard | `ClipboardController`, `PasteAction.insertNodeInto` |
+
+## Lisensi aset
+`src/icons/*.png` berasal dari FreeMind (GPLv2) → distribusi turunan wajib patuh GPL.
 
 Catatan riset lengkap tersimpan di knowledge base renv (project `freemind-web-canvas`).
+
+## Deploy (kandidat)
+Firebase Hosting, project `freemind-web-canvas` (public dir `src/`):
+- Live: https://freemind-web-canvas.web.app
+- Console: https://console.firebase.google.com/project/freemind-web-canvas/overview
+```bash
+firebase deploy --only hosting --project freemind-web-canvas
+```
 
 ## Batasan (di luar parity inti)
 Plugin FreeMind, richcontent WYSIWYG penuh, cloud/arrowlink, enkripsi, undo/redo, kolaborasi.

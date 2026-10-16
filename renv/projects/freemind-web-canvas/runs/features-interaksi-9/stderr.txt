@@ -1,0 +1,4 @@
+  File "/home/arifusr/renv/projects/freemind-web-canvas/test/features_check.mjs", line 14
+    // 1) urutan ikon: stateIcon(catatan) -> ikon builtin -> ikon link (NodeView.updateIcons)
+        ^
+SyntaxError: unmatched ')'

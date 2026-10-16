@@ -9,7 +9,7 @@
   #toolbar { position: fixed; top: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; flex-wrap: wrap;
              background: rgba(255,255,255,.92); padding: 6px; border: 1px solid #ccc; border-radius: 8px; }
   #toolbar button { padding: 4px 8px; }
-  canvas { display: block; cursor: grab; }
+  canvas { display: block; cursor: grab; touch-action: none; width: 100%; height: 100%; }
   canvas:active { cursor: grabbing; }
   #hint { position: fixed; bottom: 8px; left: 8px; color: #666; font-size: 12px; }
 </style>
@@ -22,11 +22,17 @@
   <button id="child">+ Anak (Tab)</button>
   <button id="sibling">+ Saudara (Enter)</button>
   <button id="del">Hapus</button>
+  <button id="copy">Salin (Ctrl+C)</button>
+  <button id="paste">Tempel (Ctrl+V)</button>
+  <button id="dup">Duplikat (Ctrl+D)</button>
+  <button id="find">Cari (Ctrl+F)</button>
+  <button id="foldall">Fold all</button>
+  <button id="unfoldall">Unfold all</button>
   <button id="undo">Undo</button>
   <button id="redo">Redo</button>
   <input id="file" type="file" accept=".mm,.xml" hidden>
 </div>
-<div id="hint">Klik pilih · dobel-klik edit · drag node ke node lain = pindah · Space fold · Enter/Del/Tab · Ctrl+Z / Ctrl+Shift+Z · scroll zoom · drag latar = pan</div>
+<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · Space fold · Tab/Enter/Del · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit zoom · drag latar = pan</div>
 <canvas id="cv"></canvas>
 
 <script id="seed" type="application/xml">
@@ -47,93 +53,268 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, visibleNodes, hitTest, boundingBox, setMeasure, SPACE_AROUND }
+import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, ICON_SIZE, SPACE_AROUND, HGAP, VGAP }
   from './freemind-core.mjs';
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 let root = parseMM(document.getElementById('seed').textContent);
 let selected = null;
+let selection = new Set();
 let view = { x: 0, y: 0, scale: 1 };
 let drag = null;       // pan
-let nodeDrag = null;   // pindah node
+let nodeDrag = null;   // pindah node (DnD reparent/reorder)
+let moveDrag = null;   // node motion (HGAP/VSHIFT) via pegangan oval
+let hoverHandle = null;
+let band = null;       // seleksi kotak (rubber-band)
+let clipboard = null;  // subtree tersalin
+let search = { q: '', hits: [], idx: -1 };
 const undoStack = [];
 const redoStack = [];
+
+// Gambar ikon BUILTIN FreeMind (src/icons/*.png), dimuat lazily.
+const images = new Map();
+function ensureIcons(nodes) {
+  for (const n of nodes) for (const k of iconKeys(n)) {
+    if (!images.has(k)) {
+      const img = new Image();
+      img.onload = draw;
+      img.onerror = () => {};
+      img.src = `icons/${k}.png`;
+      images.set(k, img);
+    }
+  }
+}
 
 const makeNode = (position = null) => ({ text: 'Node baru', folded: false, position, style: null, color: null,
   bg: null, edge: null, font: null, icons: [], rich: null, note: null, cloud: null, arrowlinks: [],
   attrs: [], children: [], hGap: 20, vGap: 3, shiftY: 0 });
 
 function commit() { undoStack.push(serializeMM(root)); if (undoStack.length > 200) undoStack.shift(); redoStack.length = 0; }
-function undo() { if (!undoStack.length) return; redoStack.push(serializeMM(root)); root = parseMM(undoStack.pop()); selected = null; relayout(); }
-function redo() { if (!redoStack.length) return; undoStack.push(serializeMM(root)); root = parseMM(redoStack.pop()); selected = null; relayout(); }
+function undo() { if (!undoStack.length) return; redoStack.push(serializeMM(root)); root = parseMM(undoStack.pop()); selected = null; selection = new Set(); relayout(); }
+function redo() { if (!redoStack.length) return; undoStack.push(serializeMM(root)); root = parseMM(redoStack.pop()); selected = null; selection = new Set(); relayout(); }
+
+function cssSize() {
+  const r = cv.getBoundingClientRect();
+  return { w: r.width || cv.clientWidth || innerWidth, h: r.height || cv.clientHeight || innerHeight };
+}
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
-  cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+  const { w, h } = cssSize();
+  cv.width = Math.max(1, Math.round(w * dpr));
+  cv.height = Math.max(1, Math.round(h * dpr));
   draw();
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
 setMeasure((node) => {
-  ctx.font = '14px sans-serif';
-  return { w: Math.max(30, ctx.measureText(node.text).width + 16), h: 22 };
+  ctx.font = fontString(node);
+  const tw = ctx.measureText(node.text).width;
+  return { w: Math.max(30, tw + iconRowWidth(node) + 16), h: Math.max(22, ICON_SIZE + 6) };
 });
 
 function relayout() { if (root) layout(root); draw(); }
 
 function draw() {
   const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
   ctx.translate(view.x, view.y);
   ctx.scale(view.scale, view.scale);
-  if (root) render(ctx, root, { selectedNode: selected });
+  if (root) { ensureIcons(visibleNodes(root)); render(ctx, root, { selectedNode: selected, selection, images }); }
+  if (nodeDrag && nodeDrag.moved && nodeDrag.node) {
+    const n = nodeDrag.node;
+    const cx = n._contentX + n._w / 2, cy = n._contentY + n._h / 2;
+    renderSubtreeAt(ctx, n, nodeDrag.world.x - nodeDrag.grab.x - cx, nodeDrag.world.y - nodeDrag.grab.y - cy,
+      { root, selectedNode: n, images });
+  }
+  if (band) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(80,140,255,0.15)';
+    ctx.strokeStyle = 'rgba(80,140,255,0.8)';
+    ctx.lineWidth = 1 / view.scale;
+    ctx.setLineDash([5 / view.scale, 3 / view.scale]);
+    const bx = Math.min(band.x0, band.x1), by = Math.min(band.y0, band.y1);
+    const bw = Math.abs(band.x1 - band.x0), bh = Math.abs(band.y1 - band.y0);
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.restore();
+  }
   if (nodeDrag && nodeDrag.target) {
     const t = nodeDrag.target;
+    // MainView.paintDragOver: NodeView.dragColor = lightGray.
     ctx.save();
-    ctx.strokeStyle = '#ff3b30';
-    ctx.lineWidth = 2 / view.scale;
-    ctx.setLineDash([6 / view.scale, 4 / view.scale]);
-    if (nodeDrag.mode === 'before' || nodeDrag.mode === 'after') {
-      const y = nodeDrag.mode === 'before' ? t._contentY : t._contentY + t._h;
-      ctx.beginPath();
-      ctx.moveTo(t._contentX, y);
-      ctx.lineTo(t._contentX + t._w, y);
-      ctx.stroke();
+    ctx.fillStyle = '#d3d3d3';
+    if (nodeDrag.mode === 'sibling') {
+      // DRAGGED_OVER_SIBLING: seluruh node ditint.
+      ctx.globalAlpha = 0.65;
+      ctx.fillRect(t._contentX, t._contentY, t._w, t._h);
     } else {
-      ctx.strokeRect(t._contentX, t._contentY, t._w, t._h);
+      // DRAGGED_OVER_SON: bagian yang menjauh dari root ditint.
+      ctx.globalAlpha = 0.55;
+      if (t._side === 'left') ctx.fillRect(t._contentX, t._contentY, t._w * 3 / 4, t._h);
+      else ctx.fillRect(t._contentX + t._w / 4, t._contentY, t._w * 3 / 4, t._h);
     }
     ctx.restore();
   }
+  const handleNode = (moveDrag && moveDrag.node) || hoverHandle;
+  if (handleNode) drawHandle(ctx, handleNode);
 }
 
+// Petakan titik pointer (CSS px) -> koordinat dunia, dengan membalik persis
+// transform gambar (termasuk rasio backing-store/CSS), sehingga cocok di semua DPR/zoom.
 const toWorld = (ev) => {
   const r = cv.getBoundingClientRect();
+  const sx = r.width ? cv.width / r.width : 1;
+  const sy = r.height ? cv.height / r.height : 1;
+  const px = (ev.clientX - r.left) * sx;
+  const py = (ev.clientY - r.top) * sy;
+  const m = ctx.getTransform ? ctx.getTransform() : null;
+  if (m && m.a) {
+    const det = m.a * m.d - m.b * m.c;
+    if (det) return { x: (m.d * (px - m.e) - m.c * (py - m.f)) / det, y: (-m.b * (px - m.e) + m.a * (py - m.f)) / det };
+  }
   return { x: (ev.clientX - r.left - view.x) / view.scale, y: (ev.clientY - r.top - view.y) / view.scale };
 };
 const isDescendant = (anc, n) => { let p = n._parent; while (p) { if (p === anc) return true; p = p._parent; } return false; };
 
+// Kursor menegaskan mode: pegangan oval & motion = 'move'; menyeret = 'grabbing';
+// di atas link = 'pointer' (tangan); di atas node = 'pointer'; latar = 'grab'.
+function setCursor(w) {
+  let c;
+  if (moveDrag) c = 'move';
+  else if (nodeDrag && nodeDrag.moved) c = 'grabbing';
+  else if (drag || band) c = 'grabbing';
+  else if (hoverHandle) c = 'move';
+  else if (w && hitHandle(root, w.x, w.y)) c = 'move';
+  else if (w && (hitLink(root, w.x, w.y) || hitFold(root, w.x, w.y))) c = 'pointer';
+  else if (w && hitTest(root, w.x, w.y)) c = 'pointer';
+  else c = 'grab';
+  if (cv.style.cursor !== c) cv.style.cursor = c;
+}
+
 function fit() {
   if (!root) return;
+  const { w: cw, h: ch } = cssSize();
   const bb = boundingBox(root);
   const w = bb.maxX - bb.minX + 2 * SPACE_AROUND, h = bb.maxY - bb.minY + 2 * SPACE_AROUND;
-  view.scale = Math.min(innerWidth / w, innerHeight / h, 1.5);
-  view.x = (innerWidth - (bb.minX + bb.maxX) * view.scale) / 2;
-  view.y = (innerHeight - (bb.minY + bb.maxY) * view.scale) / 2;
+  view.scale = Math.min(cw / w, ch / h, 1.5);
+  view.x = (cw - (bb.minX + bb.maxX) * view.scale) / 2;
+  view.y = (ch - (bb.minY + bb.maxY) * view.scale) / 2;
   draw();
 }
 
-cv.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return;
-  const w = toWorld(e);
-  const hit = hitTest(root, w.x, w.y);
-  if (hit) { selected = hit; nodeDrag = { node: hit, moved: false, target: null, world: w }; draw(); }
-  else { drag = { x: e.clientX - view.x, y: e.clientY - view.y }; }
+cv.style.touchAction = 'none';
+const pointers = new Map();
+let pinch = null;
+
+function hitAt(ev) { const w = toWorld(ev); return { w, hit: hitTest(root, w.x, w.y) }; }
+
+cv.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  cv.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    nodeDrag = null; drag = null;
+    const [a, b] = [...pointers.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: view.scale };
+    draw();
+    return;
+  }
+  if (pointers.size !== 1) return;
+  hoverHandle = null;
+  const { w, hit } = hitAt(e);
+  const handle = hitHandle(root, w.x, w.y);
+  const ctrl = e.ctrlKey || e.metaKey;
+  const linkNode = hitLink(root, w.x, w.y);
+  if (ctrl && linkNode) { // Ctrl+klik mengikuti hyperlink (MainView.followLink)
+    window.open(linkNode.link, '_blank', 'noopener');
+    return;
+  }
+  const foldNode = hitFold(root, w.x, w.y);
+  if (foldNode) {
+    commit(); foldNode.folded = !foldNode.folded; selected = foldNode; selection = new Set([foldNode]); relayout();
+  } else if (handle) {
+    moveDrag = {
+      node: handle, start: { x: w.x, y: w.y }, committed: false, ctrl,
+      orig: {
+        hGap: handle.hGap, shiftY: handle.shiftY,
+        vGap: handle._parent ? handle._parent.vGap : VGAP,
+      },
+    };
+    selected = handle;
+    selection = new Set([handle]);
+    setCursor(w);
+    draw();
+  } else if (hit) {
+    if (e.shiftKey) {
+      if (selection.has(hit)) selection.delete(hit); else selection.add(hit);
+      selected = hit;
+      setCursor(w);
+      draw();
+    } else {
+      selected = hit;
+      selection = new Set([hit]);
+      nodeDrag = { node: hit, moved: false, target: null, world: w,
+        grab: { x: w.x - (hit._contentX + hit._w / 2), y: w.y - (hit._contentY + hit._h / 2) } };
+      draw();
+    }
+  } else if (e.shiftKey) {
+    band = { x0: w.x, y0: w.y, x1: w.x, y1: w.y };
+    draw();
+  } else {
+    selected = null; selection = new Set();
+    drag = { x: e.clientX - view.x, y: e.clientY - view.y };
+    draw();
+  }
 });
-window.addEventListener('mousemove', (e) => {
-  if (drag) { view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw(); return; }
+
+cv.addEventListener('pointermove', (e) => {
+  if (pointers.size === 0) { // hanya hover (tak ada tombol ditekan)
+    const w = toWorld(e);
+    const h = hitHandle(root, w.x, w.y);
+    if (h !== hoverHandle) { hoverHandle = h; draw(); }
+    setCursor(w);
+    return;
+  }
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2 && pinch) {
+    const [a, b] = [...pointers.values()];
+    const r = cv.getBoundingClientRect();
+    const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
+    const ns = Math.max(0.1, Math.min(6, pinch.scale * ((Math.hypot(a.x - b.x, a.y - b.y) || 1) / pinch.dist)));
+    const k = ns / view.scale;
+    view.x = mx - (mx - view.x) * k;
+    view.y = my - (my - view.y) * k;
+    view.scale = ns;
+    draw();
+    return;
+  }
+  if (band) { const w = toWorld(e); band.x1 = w.x; band.y1 = w.y; draw(); return; }
+  if (moveDrag) {
+    const w = toWorld(e);
+    const dx = w.x - moveDrag.start.x;
+    const dy = w.y - moveDrag.start.y;
+    if (Math.abs(dx) + Math.abs(dy) > 0)
+      if (!moveDrag.committed) { commit(); moveDrag.committed = true; }
+    const n = moveDrag.node;
+    if (moveDrag.ctrl) {
+      // Ctrl+drag: ubah jarak antar-saudara (VGap induk).
+      if (n._parent) n._parent.vGap = Math.max(0, Math.round(moveDrag.orig.vGap - dy));
+    } else {
+      n.shiftY = Math.round(moveDrag.orig.shiftY + dy);
+      n.hGap = Math.round(moveDrag.orig.hGap + (n._side === 'left' ? -dx : dx));
+    }
+    relayout();
+    setCursor();
+    return;
+  }
+  if (drag) { view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw(); setCursor(); return; }
   if (nodeDrag) {
     const w = toWorld(e);
     nodeDrag.moved = true;
@@ -144,36 +325,66 @@ window.addEventListener('mousemove', (e) => {
     if (!valid) nodeDrag.mode = null;
     else if (!t._parent) nodeDrag.mode = 'child';
     else {
-      const relY = w.y - t._contentY;
-      nodeDrag.mode = relY < t._h / 3 ? 'before' : (relY > t._h * 2 / 3 ? 'after' : 'child');
+      // MainView.dropAsSibling: tepi-dalam (menghadap root) sepertiga lebar node.
+      const rel = w.x - t._contentX;
+      const inner = t._side === 'left' ? rel > t._w * 2 / 3 : rel < t._w / 3;
+      nodeDrag.mode = inner ? 'sibling' : 'child';
     }
     draw();
+    setCursor();
   }
 });
-window.addEventListener('mouseup', () => {
+
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size !== 0) return;
   if (nodeDrag) {
     if (nodeDrag.moved && nodeDrag.target) {
       commit();
       const t = nodeDrag.target;
       const parent = nodeDrag.node._parent;
       if (parent) parent.children.splice(parent.children.indexOf(nodeDrag.node), 1);
-      if (nodeDrag.mode === 'before' || nodeDrag.mode === 'after') {
+      if (nodeDrag.mode === 'sibling') {
+        // PasteAction.insertNodeInto(asSibling): sisipkan tepat sebelum target,
+        // di sisi yang sama dengan target.
         const tp = t._parent;
-        const at = tp.children.indexOf(t) + (nodeDrag.mode === 'after' ? 1 : 0);
+        const at = tp.children.indexOf(t);
         nodeDrag.node.position = t.position;
         tp.children.splice(at, 0, nodeDrag.node);
       } else {
-        nodeDrag.node.position = nodeDrag.world.x < t._contentX + t._w / 2 ? 'left' : 'right';
+        nodeDrag.node.position = !t._parent
+          ? (nodeDrag.world.x < t._contentX + t._w / 2 ? 'left' : 'right')
+          : t._side;
         t.children.push(nodeDrag.node);
         t.folded = false;
       }
       selected = nodeDrag.node;
+      selection = new Set([nodeDrag.node]);
       relayout();
     }
     nodeDrag = null;
   }
+  if (band) {
+    const x0 = Math.min(band.x0, band.x1), x1 = Math.max(band.x0, band.x1);
+    const y0 = Math.min(band.y0, band.y1), y1 = Math.max(band.y0, band.y1);
+    selection = new Set();
+    for (const n of visibleNodes(root)) {
+      if (n._contentX + n._w >= x0 && n._contentX <= x1 && n._contentY + n._h >= y0 && n._contentY <= y1)
+        selection.add(n);
+    }
+    selected = selection.size ? visibleNodes(root).find((n) => selection.has(n)) : null;
+    band = null;
+  }
+  if (moveDrag) { moveDrag = null; relayout(); }
   drag = null;
-});
+  setCursor();
+  draw();
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+
 cv.addEventListener('wheel', (e) => {
   e.preventDefault();
   const r = cv.getBoundingClientRect();
@@ -184,7 +395,17 @@ cv.addEventListener('wheel', (e) => {
   view.scale *= factor;
   draw();
 }, { passive: false });
-cv.addEventListener('dblclick', () => {
+cv.addEventListener('dblclick', (e) => {
+  const w = toWorld(e);
+  const h = hitHandle(root, w.x, w.y);
+  if (h) {
+    // MindMapNodeMotionListener.mouseClicked: reset posisi (atau Ctrl: reset VGap).
+    commit();
+    if (e.ctrlKey || e.metaKey) { if (h._parent) h._parent.vGap = VGAP; }
+    else { h.hGap = HGAP; h.shiftY = 0; }
+    relayout();
+    return;
+  }
   if (!selected) return;
   const t = prompt('Teks node:', selected.text);
   if (t !== null && t !== selected.text) { commit(); selected.text = t; relayout(); }
@@ -196,7 +417,7 @@ function addChild() {
   const n = makeNode(selected._side === 'left' ? 'left' : null);
   selected.children.push(n);
   selected.folded = false;
-  selected = n;
+  selected = n; selection = new Set([n]);
   relayout();
 }
 function addSibling() {
@@ -204,23 +425,77 @@ function addSibling() {
   commit();
   const n = makeNode(selected.position);
   selected._parent.children.push(n);
-  selected = n;
+  selected = n; selection = new Set([n]);
   relayout();
 }
 function remove() {
-  if (!selected || !selected._parent) return;
+  const targets = (selection.size ? [...selection] : (selected ? [selected] : [])).filter((n) => n._parent);
+  if (!targets.length) return;
   commit();
-  const p = selected._parent;
-  p.children.splice(p.children.indexOf(selected), 1);
-  selected = p;
+  for (const n of targets) { const p = n._parent; p.children.splice(p.children.indexOf(n), 1); }
+  selected = targets[0]._parent;
+  selection = new Set(selected ? [selected] : []);
   relayout();
 }
 function fold() { if (selected && selected.children.length) { commit(); selected.folded = !selected.folded; relayout(); } }
+
+// Clipboard internal (ClipboardController): Ctrl+C/X/V/D.
+function copyNode() { if (selected) clipboard = cloneSubtree(selected); }
+function cutNode() { if (selected && selected._parent) { clipboard = cloneSubtree(selected); remove(); } }
+function pasteNode() {
+  if (!clipboard || !selected) return;
+  commit();
+  const n = cloneSubtree(clipboard);
+  selected.children.push(n);
+  selected.folded = false;
+  selected = n; selection = new Set([n]);
+  relayout();
+}
+function duplicateNode() {
+  if (!selected) return;
+  commit();
+  const n = cloneSubtree(selected);
+  if (selected._parent) {
+    const p = selected._parent;
+    p.children.splice(p.children.indexOf(selected) + 1, 0, n);
+  } else selected.children.push(n);
+  selected = n; selection = new Set([n]);
+  relayout();
+}
+
+function centerOn(n) {
+  const { w: cw, h: ch } = cssSize();
+  view.x = cw / 2 - (n._contentX + n._w / 2) * view.scale;
+  view.y = ch / 2 - (n._contentY + n._h / 2) * view.scale;
+}
+function findNext(dir = 1) {
+  if (!search.q) { startSearch(); return; }
+  const ql = search.q.toLowerCase();
+  if (!search.hits.length) search.hits = visibleNodes(root).filter((n) => n.text.toLowerCase().includes(ql));
+  if (!search.hits.length) { alert('Tidak ditemukan: ' + search.q); return; }
+  search.idx = (search.idx + dir + search.hits.length) % search.hits.length;
+  selected = search.hits[search.idx];
+  selection = new Set([selected]);
+  centerOn(selected);
+  draw();
+}
+function startSearch() {
+  const q = prompt('Cari teks node:', search.q || '');
+  if (q == null || !q) return;
+  search = { q, hits: [], idx: -1 };
+  findNext(1);
+}
 
 window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+  else if (ctrl && e.key.toLowerCase() === 'c') { e.preventDefault(); copyNode(); }
+  else if (ctrl && e.key.toLowerCase() === 'x') { e.preventDefault(); cutNode(); }
+  else if (ctrl && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteNode(); }
+  else if (ctrl && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateNode(); }
+  else if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); startSearch(); }
+  else if (e.key === 'F3') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
   else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
   else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
   else if (e.key === 'Delete') remove();
@@ -230,6 +505,12 @@ window.addEventListener('keydown', (e) => {
 document.getElementById('child').onclick = addChild;
 document.getElementById('sibling').onclick = addSibling;
 document.getElementById('del').onclick = remove;
+document.getElementById('copy').onclick = copyNode;
+document.getElementById('paste').onclick = pasteNode;
+document.getElementById('dup').onclick = duplicateNode;
+document.getElementById('find').onclick = startSearch;
+document.getElementById('foldall').onclick = () => { commit(); foldAll(root, true); relayout(); };
+document.getElementById('unfoldall').onclick = () => { commit(); foldAll(root, false); relayout(); };
 document.getElementById('fit').onclick = fit;
 document.getElementById('undo').onclick = undo;
 document.getElementById('redo').onclick = redo;
@@ -242,7 +523,7 @@ document.getElementById('import').onclick = () => document.getElementById('file'
 document.getElementById('file').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   commit();
-  root = parseMM(await f.text()); selected = null; relayout(); fit();
+  root = parseMM(await f.text()); selected = null; selection = new Set(); relayout(); fit();
 };
 
 resize();
