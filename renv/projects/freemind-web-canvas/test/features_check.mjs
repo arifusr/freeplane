@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createNode, layout, serializeMM, parseMM, renderSVG,
-  iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes,
+  iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
   ICON_SIZE,
 } from '../src/freemind-core.mjs';
 
@@ -102,6 +102,17 @@ bdst.folded = true;
 layout(ar);
 const arrowHidden = !renderSVG(ar).includes('#0000ff');
 m.arrowlink_hidden_target_ok = arrowShown && arrowHidden ? 1 : 0;
+
+// 10) atribut & catatan: visibilitas mode + render blok di SVG
+const an = createNode('a'); an.attrs = [{ name: 'warna', value: 'merah' }];
+m.attr_visible_all_ok = attrVisible(an, 'all', null, null) ? 1 : 0;
+m.attr_visible_hide_ok = attrVisible(an, 'hide', null, null) ? 0 : 1;
+m.attr_visible_selected_ok = (attrVisible(an, 'selected', an, null) && !attrVisible(an, 'selected', null, null)) ? 1 : 0;
+const ar2 = createNode('root'); const ac = createNode('c'); ac.attrs = [{ name: 'k', value: 'v' }];
+ac._baseH = 22; ac._attrRows = 1; ac._attrsVisible = ac.attrs; ac._attrColW = 40;
+ar2.children = [ac]; layout(ar2);
+m.attr_svg_block_ok = renderSVG(ar2).includes('>v<') ? 1 : 0;
+m.note_roundtrip_ok = parseMM(serializeMM(function () { const z = createNode('n'); z.note = 'catatan'; return z; }())).note === 'catatan' ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });

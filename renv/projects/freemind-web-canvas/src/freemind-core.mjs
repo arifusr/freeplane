@@ -11,6 +11,9 @@ export const ICON_SIZE = 16;    // ukuran ikon BUILTIN (MultipleImage)
 export const FOLD_SYMBOL = 8;   // NodeView.getFoldingSymbolWidth() default
 export const EDGE_XCTRL = 12;   // BezierEdgeView.XCTRL
 export const EDGE_CHILD_XCTRL = 20; // BezierEdgeView.CHILD_XCTRL
+export const ATTR_ROW_H = 15;   // tinggi satu baris atribut (AttributeView)
+export const ATTR_FONT = '11px sans-serif';
+export const ATTR_PAD = 4;
 
 // ---------------------------------------------------------------------------
 // Parser XML minimal (cukup untuk .mm): elemen, atribut, entitas, CDATA, komentar.
@@ -315,14 +318,17 @@ function place(node) {
   }
 }
 
+// Tinggi kotak node inti (tanpa blok atribut yang menggantung di bawahnya).
+function baseH(node) { return node._baseH != null ? node._baseH : node._h; }
+
 // Titik masuk/keluar node (analog MainView getLeft/Center/RightPoint).
 export function inPoint(node) {
-  if (node._side === 'left') return { x: node._contentX + node._w, y: node._contentY + node._h / 2 };
-  return { x: node._contentX, y: node._contentY + node._h / 2 };
+  if (node._side === 'left') return { x: node._contentX + node._w, y: node._contentY + baseH(node) / 2 };
+  return { x: node._contentX, y: node._contentY + baseH(node) / 2 };
 }
 export function outPoint(node) {
-  if (node._side === 'left') return { x: node._contentX, y: node._contentY + node._h / 2 };
-  return { x: node._contentX + node._w, y: node._contentY + node._h / 2 };
+  if (node._side === 'left') return { x: node._contentX, y: node._contentY + baseH(node) / 2 };
+  return { x: node._contentX + node._w, y: node._contentY + baseH(node) / 2 };
 }
 
 // ---------------------------------------------------------------------------
@@ -552,8 +558,16 @@ export function iconKeys(node) {
 
 export function iconRowWidth(node) { return iconKeys(node).length * ICON_SIZE; }
 
+// Visibilitas atribut (AttributeTableLayoutModel): 'all'|'extended', 'selected', 'hide'.
+export function attrVisible(node, mode, selected, selection) {
+  if (!node.attrs || node.attrs.length === 0) return false;
+  if (mode === 'hide') return false;
+  if (mode === 'selected') return node === selected || !!(selection && selection.has(node));
+  return true;
+}
+
 function drawNode(ctx, node, opts, root) {
-  const x = node._contentX, y = node._contentY, w = node._w, h = node._h;
+  const x = node._contentX, y = node._contentY, w = node._w, h = baseH(node);
   const style = node === root ? 'root' : resolvedStyle(node, root);
   const sel = opts.selectedNode === node || (opts.selection && opts.selection.has(node));
   ctx.save();
@@ -605,6 +619,42 @@ function drawNode(ctx, node, opts, root) {
     }
   }
   if (node.children.length) drawFoldIndicator(ctx, node);
+  if (node._attrRows) drawAttrBlock(ctx, node, y + baseH(node));
+  ctx.restore();
+}
+
+// Blok atribut (AttributeView): tabel dua kolom nama|nilai di bawah kotak node.
+function drawAttrBlock(ctx, node, yTop) {
+  const x = node._contentX, w = node._w, rows = node._attrsVisible || [];
+  const n = rows.length;
+  if (!n) return;
+  const colW = node._attrColW || w / 2;
+  ctx.save();
+  ctx.font = ATTR_FONT;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#c0c0c0';
+  ctx.lineWidth = 1;
+  ctx.fillRect(x, yTop, w, n * ATTR_ROW_H + ATTR_PAD);
+  ctx.strokeRect(x, yTop, w, n * ATTR_ROW_H + ATTR_PAD);
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.beginPath();
+  ctx.moveTo(x + colW, yTop); ctx.lineTo(x + colW, yTop + n * ATTR_ROW_H + ATTR_PAD);
+  ctx.stroke();
+  for (let i = 0; i < n; i++) {
+    const ry = yTop + ATTR_PAD / 2 + i * ATTR_ROW_H;
+    if (i) {
+      ctx.strokeStyle = '#eee';
+      ctx.beginPath(); ctx.moveTo(x, ry); ctx.lineTo(x + w, ry); ctx.stroke();
+    }
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold ' + ATTR_FONT;
+    ctx.fillText(rows[i].name, x + 3, ry + ATTR_ROW_H / 2);
+    ctx.font = ATTR_FONT;
+    ctx.fillStyle = '#101010';
+    ctx.fillText(rows[i].value, x + colW + 3, ry + ATTR_ROW_H / 2);
+  }
   ctx.restore();
 }
 
@@ -731,7 +781,7 @@ export function cloneSubtree(node) {
 // oval di sisi-dalam node untuk memindah koordinat relatif (HGAP, VSHIFT).
 // ---------------------------------------------------------------------------
 export function handleRect(node) {
-  const y = node._contentY, h = node._h;
+  const y = node._contentY, h = baseH(node);
   if (node._side === 'left') return { x: node._contentX + node._w, y, w: HANDLE_W, h };
   return { x: node._contentX - HANDLE_W, y, w: HANDLE_W, h };
 }
@@ -860,7 +910,7 @@ export function renderSVG(root, opts = {}) {
 
   walk(root, (n) => {
     if (!vis.has(n)) return;
-    const x = n._contentX, y = n._contentY, w = n._w, h = n._h;
+    const x = n._contentX, y = n._contentY, w = n._w, h = baseH(n);
     const style = n === root ? 'root' : resolvedStyle(n, root);
     const sel = opts.selectedNode === n;
     if (style === 'root') {
@@ -888,6 +938,16 @@ export function renderSVG(root, opts = {}) {
       out.push(`<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="#ffffff" stroke="${n.edge?.color || '#606060'}"/>`);
       out.push(`<line x1="${p.x - r}" y1="${p.y}" x2="${p.x + r}" y2="${p.y}" stroke="${n.edge?.color || '#606060'}"/>`);
       if (n.folded) out.push(`<line x1="${p.x}" y1="${p.y - r}" x2="${p.x}" y2="${p.y + r}" stroke="${n.edge?.color || '#606060'}"/>`);
+    }
+    if (n._attrRows) {
+      const rows = n._attrsVisible || []; const yTop = y + h; const colW = n._attrColW || w / 2;
+      out.push(`<rect x="${x}" y="${yTop}" width="${w}" height="${rows.length * ATTR_ROW_H + ATTR_PAD}" fill="#ffffff" stroke="#c0c0c0"/>`);
+      out.push(`<line x1="${x + colW}" y1="${yTop}" x2="${x + colW}" y2="${yTop + rows.length * ATTR_ROW_H + ATTR_PAD}" stroke="#e0e0e0"/>`);
+      rows.forEach((r, i) => {
+        const ry = yTop + ATTR_PAD / 2 + i * ATTR_ROW_H + ATTR_ROW_H / 2;
+        out.push(`<text x="${x + 3}" y="${ry}" dominant-baseline="central" font-size="11" font-weight="bold" fill="#333">${escXml(r.name)}</text>`);
+        out.push(`<text x="${x + colW + 3}" y="${ry}" dominant-baseline="central" font-size="11" fill="#101010">${escXml(r.value)}</text>`);
+      });
     }
   });
 
