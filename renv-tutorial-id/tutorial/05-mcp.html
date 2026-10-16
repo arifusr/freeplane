@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bab 05 — MCP untuk AI · Tutorial renv</title>
+  <meta name="description" content="Menghubungkan agen AI ke renv melalui MCP, 57 tool, dan protokol operasi AGENTS.md." />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <header class="subhead">
+    <nav class="nav">
+      <span class="brand"><a href="../">renv<span class="accent">.ai</span></a></span>
+      <ul>
+        <li><a href="../">Beranda</a></li>
+        <li><a href="01-instalasi">01 Instalasi</a></li>
+        <li><a href="02-klaim-sitasi">02 Klaim &amp; Sitasi</a></li>
+        <li><a href="03-eksperimen">03 Eksperimen</a></li>
+        <li><a href="04-manuskrip">04 Manuskrip</a></li>
+        <li><a href="05-mcp">05 MCP</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="article">
+    <p class="crumb">Tutorial · Bab 05</p>
+    <h1>MCP untuk AI</h1>
+    <p class="lead">
+      renv menyediakan server MCP stdio sehingga agen dapat menjalankan seluruh
+      loop riset melalui jalur kode dan batasan yang sama dengan CLI.
+    </p>
+
+    <h2>5.1 Menjalankan server MCP</h2>
+    <pre><code>uv run renv mcp          # server stdio (untuk klien MCP)</code></pre>
+    <p>Konfigurasi klien (contoh gaya umum):</p>
+    <pre><code>{
+  "mcpServers": {
+    "renv": { "command": "uv", "args": ["run", "renv", "mcp"] }
+  }
+}</code></pre>
+    <div class="callout">
+      Karena corpus diresolusi relatif terhadap direktori kerja, jalankan dengan
+      cwd di root repo renv. Contoh untuk klien yang tak punya opsi
+      <code>cwd</code>: <code>uv run --directory /path/ke/renv renv mcp</code>.
+    </div>
+
+    <h2>5.2 Sekilas tool (57 buah)</h2>
+    <table>
+      <thead><tr><th>Kategori</th><th>Tool</th></tr></thead>
+      <tbody>
+        <tr><td>Klaim &amp; sitasi</td><td><code>add_claim</code>, <code>cite_claim</code>, <code>link_claim_evidence</code>, <code>list_claims</code>, <code>get_claim</code>, <code>retract_evidence</code>, <code>relate_claims</code>, <code>analyze_argument</code></td></tr>
+        <tr><td>Eksperimen</td><td><code>create_experiment</code>, <code>run_experiment</code>, <code>start_run</code>, <code>run_status</code>, <code>ingest_run</code>, <code>declare_test</code>, <code>list_experiments</code></td></tr>
+        <tr><td>Corpus &amp; paper</td><td><code>add_paper</code>, <code>discover_papers</code>, <code>search_corpus</code>, <code>get_card</code>, <code>list_paper_references</code>, <code>inbox</code></td></tr>
+        <tr><td>Manuskrip</td><td><code>weave</code>, <code>compile_manuscript</code>, <code>manuscript_read</code>, <code>manuscript_write</code></td></tr>
+        <tr><td>Log &amp; catatan</td><td><code>log_decision</code>, <code>list_log</code>, <code>add_note</code>, <code>add_plan_item</code>, <code>list_plan</code></td></tr>
+        <tr><td>Review</td><td><code>review</code>, <code>rubric</code>, <code>list_findings</code>, <code>adjudicate_finding</code></td></tr>
+        <tr><td>Infra</td><td><code>register_dataset</code>, <code>add_remote</code>, <code>list_remotes</code>, <code>check_invariants</code></td></tr>
+        <tr><td>Read-only</td><td><code>query</code>, <code>search</code>, <code>status</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>5.3 Protokol operasi (AGENTS.md)</h2>
+    <p>Berkas <code>AGENTS.md</code> di root repo adalah protokol yang diikuti agen. Ringkasnya:</p>
+    <ol>
+      <li><strong>Pulihkan konteks dulu</strong> — <code>exp list</code> + <code>log list</code> sebelum bekerja.</li>
+      <li><strong>Sumberi setiap klaim</strong> — pekerjaan sebelumnya via <code>cite_claim</code>; hasil via run tercatat.</li>
+      <li><strong>Log sebelum berpindah arah</strong> — keputusan sebagai <code>decision</code>, item terbuka sebagai <code>question</code>.</li>
+      <li><strong>Satu eksperimen, satu pertanyaan</strong> — cabang via <code>--parent</code>.</li>
+      <li><strong>Hasil dihasilkan, tidak diketik</strong>.</li>
+      <li><strong>Snapshot</strong> dengan <code>renv export</code>.</li>
+    </ol>
+
+    <h2>5.4 Jalur baca aman</h2>
+    <pre><code># SQL read-only (SELECT/WITH) lewat MCP tool `query`
+SELECT id, text, kind, status FROM claim WHERE project_id = 1;
+
+# pencarian teks penuh di papers/cards/notes/log/claims
+uv run renv search "telephone effect"</code></pre>
+    <div class="callout">
+      <strong>Jangan buka file SQLite langsung.</strong> Escape hatch resminya
+      adalah <code>renv query</code> (CLI dan MCP <code>query</code> identik).
+    </div>
+
+    <h2>5.5 Menutup loop</h2>
+    <p>
+      Dengan MCP aktif, agen dapat menjalankan seluruh siklus — indeks corpus,
+      buat klaim, kutip span, catat run, weave — melalui batasan yang sama
+      seperti manusia di CLI. Hasilnya: state riset yang dapat diaudit.
+    </p>
+
+    <nav class="pager">
+      <a href="04-manuskrip">← Bab 04 · Menulis Manuskrip</a>
+      <a href="../">Kembali ke Beranda →</a>
+    </nav>
+  </main>
+
+  <footer><p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p></footer>
+</body>
+</html>

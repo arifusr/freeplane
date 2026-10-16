@@ -1,0 +1,55 @@
+# ============================================================
+# Deny-all: hanya yang di-allowlist di bawah yang akan di-commit
+# ============================================================
+/*
+!.gitignore
+!README-cloudshell.txt
+!research/
+!renv-tutorial-id/
+!renv/
+
+# ============================================================
+# JANGAN PERNAH commit: kredensial / auth / riwayat
+# ============================================================
+.bash_history
+.netrc
+.git-credentials
+**/gemini-credentials.json
+**/firebase-tools.json
+**/credentials.json
+**/*credentials*
+**/*.pem
+**/*.key
+**/auth.json
+
+# direktori kredensial / config pengguna (dikecualikan total)
+.gemini/
+.config/
+.local/
+.cache/
+.npm/
+.codeoss/
+.vscode/
+.docker/
+.ssh/
+
+# ============================================================
+# Berat / turunan / dapat diregenerasi
+# ============================================================
+.venv/
+**/.venv/
+node_modules/
+**/node_modules/
+__pycache__/
+**/__pycache__/
+*.pyc
+.renv/
+**/.renv/
+*.db
+*.db-shm
+*.db-wal
+*.log
+renv/cockpit/dist/
+
+# firebase deploy cache
+**/.firebase/

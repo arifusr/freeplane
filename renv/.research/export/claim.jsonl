@@ -1,0 +1,2 @@
+{"created": "2026-10-16T05:29:39+00:00", "id": 1, "kind": "thesis", "manuscript_loc": null, "project_id": 1, "status": "supported", "text": "ALCE cites at the granularity of short hundred-word passages"}
+{"created": "2026-10-16T05:30:16+00:00", "id": 2, "kind": "assertion", "manuscript_loc": null, "project_id": 1, "status": "supported", "text": "an intermediary paper propagates citation distortion downstream, drifting further with each hop"}

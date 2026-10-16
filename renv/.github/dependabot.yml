@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/cockpit"
+    schedule:
+      interval: "weekly"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      # Majors stay ungrouped except these pairs — Dependabot otherwise
+      # opens react without react-dom (and plugin-react without vite), and
+      # npm ci fails on the peer mismatch (see #21–#23).
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-react"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bab 01 — Instalasi &amp; Setup · Tutorial renv</title>
+  <meta name="description" content="Langkah demi langkah memasang renv, menyiapkan corpus, dan membuat project riset pertama." />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <header class="subhead">
+    <nav class="nav">
+      <span class="brand"><a href="../">renv<span class="accent">.ai</span></a></span>
+      <ul>
+        <li><a href="../">Beranda</a></li>
+        <li><a href="01-instalasi">01 Instalasi</a></li>
+        <li><a href="02-klaim-sitasi">02 Klaim &amp; Sitasi</a></li>
+        <li><a href="03-eksperimen">03 Eksperimen</a></li>
+        <li><a href="04-manuskrip">04 Manuskrip</a></li>
+        <li><a href="05-mcp">05 MCP</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="article">
+    <p class="crumb">Tutorial · Bab 01</p>
+    <h1>Instalasi &amp; Setup</h1>
+    <p class="lead">
+      Menyiapkan renv di mesin lokal, membangun corpus referensi, dan membuat
+      project riset pertama.
+    </p>
+
+    <h2>1.1 Prasyarat</h2>
+    <ul>
+      <li><strong>uv</strong> (pengelola Python + virtualenv) — wajib, Python 3.10+.</li>
+      <li><strong>git</strong> — untuk mengkloning repo dan versi project.</li>
+      <li><strong>Node.js</strong> — hanya jika ingin membangun <em>web cockpit</em>.</li>
+      <li><strong>sqlite3</strong> — opsional, untuk inspeksi manual (renv sendiri memakai <code>query</code>).</li>
+      <li><strong>latexmk / tectonic / pdflatex</strong> — opsional, untuk kompilasi PDF manuskrip.</li>
+    </ul>
+
+    <h2>1.2 Kloning &amp; sinkronisasi dependensi</h2>
+    <pre><code>git clone https://github.com/julianwinking/renv-ai renv
+cd renv
+uv sync</code></pre>
+    <p>
+      Inti renv berjalan dengan stdlib + satu dependensi kecil (<code>pdfminer.six</code>).
+      Backend SOTA (embedding lokal, verifier NLI) adalah <em>extras</em> yang di-<em>lazy import</em>:
+    </p>
+    <pre><code># contoh menambah verifier semantik
+uv sync --extra verify-local</code></pre>
+
+    <h2>1.3 Struktur repositori</h2>
+    <table>
+      <thead><tr><th>Path</th><th>Isi</th></tr></thead>
+      <tbody>
+        <tr><td><code>renv/</code></td><td>Engine: indexing, anchoring, verifikasi, store, eksperimen, weave, CLI, MCP.</td></tr>
+        <tr><td><code>library/</code></td><td>Corpus referensi bersama (paper <code>.pdf</code>/<code>.txt</code>/<code>.md</code>).</td></tr>
+        <tr><td><code>.renv/</code></td><td>Index turunan + lockfile (dapat diregenerasi).</td></tr>
+        <tr><td><code>.research/env.db</code></td><td><strong>Ground truth</strong>: SQLite pusat semua state.</td></tr>
+        <tr><td><code>projects/&lt;slug&gt;/</code></td><td>Satu paper: <code>src/</code>, <code>text/</code>, <code>runs/</code> (repo git sendiri).</td></tr>
+        <tr><td><code>AGENTS.md</code></td><td>Protokol operasi untuk agen (dan manusia).</td></tr>
+      </tbody>
+    </table>
+
+    <h2>1.4 Daftarkan paper &amp; bangun index</h2>
+    <p>Letakkan file paper di <code>library/</code>, lalu indeks. Metadata paper didaftarkan lewat <code>renv add</code>:</p>
+    <pre><code># dari file lokal
+uv run renv add library/gao2023_alce.txt --key gao2023_alce \
+  --title "ALCE: Automatic LLM Citation Evaluation" --year 2023
+
+# dari arXiv / DOI (unduh PDF sekaligus)
+uv run renv add 2305.14627 --download
+uv run renv add 10.1162/tacl_a_00638
+
+# dari BibTeX (cold-start)
+uv run renv add refs.bib
+
+# bangun index setelah apa pun masuk ke library/
+uv run renv index</code></pre>
+    <div class="callout">
+      <strong>Identitas paper.</strong> File yang mendarat selalu dinamai
+      <code>&lt;key&gt;.ext</code>. Menjalankan <code>renv add</code> dengan
+      <code>--key</code> yang sudah ada akan <em>melampirkan</em> teks ke paper itu.
+    </div>
+
+    <h2>1.5 Inisialisasi store &amp; project</h2>
+    <pre><code>uv run renv db init                       # buat/migrasi .research/env.db
+uv run renv project new span-citation     # baris DB + folder kerja
+uv run renv status span-citation          # corpus + state project</code></pre>
+
+    <h2>1.6 Web cockpit (opsional)</h2>
+    <pre><code>uv run renv web            # http://127.0.0.1:8765
+
+# atau pasang sebagai layanan on-demand lokal:
+uv run renv web install    # build UI + https lokal</code></pre>
+
+    <h2>1.7 Cek cepat</h2>
+    <pre><code>uv run renv papers         # daftar paper di corpus
+uv run renv status         # ringkasan corpus
+uv run renv --help         # semua perintah</code></pre>
+
+    <nav class="pager">
+      <a href="../">← Beranda</a>
+      <a href="02-klaim-sitasi">Bab 02 · Klaim &amp; Sitasi →</a>
+    </nav>
+  </main>
+
+  <footer><p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p></footer>
+</body>
+</html>

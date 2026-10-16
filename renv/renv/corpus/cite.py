@@ -1,0 +1,99 @@
+"""Render an anchored citation: a LaTeX macro + a machine-readable sidecar.
+
+LaTeX has no native span anchor, so we emit a self-contained \\spancite that
+carries the source id, the position hint, and the quoted text. The quote makes
+the citation self-verifying; the sidecar (citations.json) stores the full W3C
+anchor + verdict for tooling and re-resolution.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from renv.corpus.retrieve import Candidate
+
+# Drop this in your preamble. The PDF typesets a normal numbered citation
+# (first appearance of each source_id); a renv-cite:// link carries the span
+# so the cockpit can show the stored quote on hover. #4 stays in the .tex.
+LATEX_PREAMBLE = r"""
+% ENGINE-OWNED by renv (rewritten on weave/compile). Packages go in paper.tex.
+% renv span citation — numbered like the camera-ready paper; hover in the
+% cockpit reads the renv-cite:// annotation (source, start, end).
+\makeatletter
+\IfFileExists{hyperref.sty}{%
+  \@ifpackageloaded{hyperref}{}{\usepackage[hidelinks]{hyperref}}%
+}{}
+\newcounter{spancitenum}
+\newcommand{\spn@assign}[1]{%
+  \@ifundefined{spn@n@#1}{%
+    \stepcounter{spancitenum}%
+    \expandafter\xdef\csname spn@n@#1\endcsname{\thespancitenum}%
+  }{}%
+}
+\newcommand{\spancite}[4]{%
+  % #1 source id, #2 start, #3 end, #4 quoted span (kept in the .tex)
+  \spn@assign{#1}%
+  \begingroup
+    \edef\spn@n{\csname spn@n@#1\endcsname}%
+    \@ifundefined{href}{%
+      \textsuperscript{[\spn@n]}%
+    }{%
+      \href{renv-cite://\detokenize{#1}/#2/#3}{\textsuperscript{[\spn@n]}}%
+    }%
+  \endgroup
+}
+\makeatother
+"""
+
+
+@dataclass
+class Citation:
+    claim: str
+    source_id: str
+    source_sha256: str        # pins the exact source version cited
+    start: int
+    end: int
+    page: int | None
+    quote: str
+    prefix: str
+    suffix: str
+    support: str
+    support_score: float
+    similarity: float
+
+    def latex(self) -> str:
+        q = self.quote.replace("\\", "\\textbackslash{}").replace("&", "\\&")
+        return f"\\spancite{{{self.source_id}}}{{{self.start}}}{{{self.end}}}{{{q}}}"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def make_citation(claim: str, cand: Candidate, source_sha256: str = "") -> Citation:
+    rec = cand.record
+    a = rec.anchor["quote"]
+    v = cand.verdict
+    return Citation(
+        claim=claim,
+        source_id=rec.source_id,
+        source_sha256=source_sha256,
+        start=rec.start,
+        end=rec.end,
+        page=rec.page,
+        quote=a["exact"],
+        prefix=a.get("prefix", ""),
+        suffix=a.get("suffix", ""),
+        support=v.support if v else "unverified",
+        support_score=v.score if v else 0.0,
+        similarity=round(cand.similarity, 4),
+    )
+
+
+def append_sidecar(root: Path, citation: Citation, filename: str = "citations.json") -> Path:
+    p = Path(root) / filename
+    data = json.loads(p.read_text()) if p.exists() else []
+    data.append(citation.to_dict())
+    p.write_text(json.dumps(data, indent=2))
+    return p

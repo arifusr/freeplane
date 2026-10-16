@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- Served only when no cockpit build exists. The JSON API under /api is live
+     either way; this page just says how to get the UI. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>renv — cockpit not built</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 15px/1.6 system-ui, sans-serif;
+    background: light-dark(#fafaf9, #111113); color: light-dark(#1c1c1a, #e8e8e6);
+  }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 0.4rem; }
+  p { margin: 0.5rem 0; color: light-dark(#57534e, #a1a1aa); }
+  pre {
+    background: light-dark(#f0efed, #1c1c1f); border: 1px solid light-dark(#e0dedb, #2a2a2e);
+    border-radius: 8px; padding: 0.9rem 1.1rem; overflow-x: auto;
+    font: 13px/1.7 ui-monospace, monospace; color: light-dark(#1c1c1a, #e8e8e6);
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>renv — the cockpit is not built yet</h1>
+  <p>The API is running (try <code>/api/overview</code>), but this server found
+     no cockpit bundle. Build it once, then reload:</p>
+  <pre>cd cockpit
+npm install
+npm run build</pre>
+  <p>The server picks the build up automatically — no restart needed.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>renv — Tutorial &amp; Panduan (Bahasa Indonesia)</title>
+  <meta name="description" content="Panduan berbahasa Indonesia untuk menggunakan renv: lingkungan riset local-first dengan satu basis data SQLite, sitasi ter-anchor span, dan MCP." />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <header class="hero">
+    <nav class="nav">
+      <span class="brand">renv<span class="accent">.ai</span></span>
+      <ul>
+        <li><a href="#apa-itu">Apa itu renv</a></li>
+        <li><a href="#instalasi">Instalasi</a></li>
+        <li><a href="#alur">Alur riset</a></li>
+        <li><a href="#tutorial">Tutorial</a></li>
+        <li><a href="#mcp">MCP</a></li>
+      </ul>
+    </nav>
+    <div class="hero-inner">
+      <h1>Tutorial renv dalam Bahasa Indonesia</h1>
+      <p>
+        Lingkungan riset <em>local-first</em>: satu basis data SQLite sebagai
+        sumber kebenaran tunggal untuk paper, sitasi, eksperimen, klaim, dan
+        log keputusan — digerakkan oleh AI Anda melalui MCP.
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="#instalasi">Mulai dari Instalasi</a>
+        <a class="btn" href="#alur">Lihat Alur Riset</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="apa-itu">
+      <h2>Apa itu renv</h2>
+      <p>
+        <strong>renv</strong> menyimpan seluruh state riset ke dalam satu file
+        SQLite. Klien (CLI, MCP, dan web cockpit) hanya lapisan tipis di atas
+        domain functions yang sama, jadi tidak ada salinan kedua dari apa pun.
+      </p>
+      <ul class="features">
+        <li><strong>Satu store, klien tipis.</strong> DB SQLite adalah ground truth; tidak ada state ganda.</li>
+        <li><strong>Sitasi ter-anchor span.</strong> Anchor-nya adalah teks kutipan itu sendiri, diverifikasi terhadap klaim.</li>
+        <li><strong>Eksperimen sebagai DAG.</strong> Satu eksperimen, satu pertanyaan; bercabang alih-alih mengubah.</li>
+        <li><strong>Provenance ditegakkan.</strong> Angka hanya boleh masuk lewat <code>run</code> yang tercatat.</li>
+        <li><strong>Klaim tertaut bukti.</strong> Status <code>supported</code>/<code>refuted</code> dihitung, bukan diketik.</li>
+        <li><strong>Angka di-<em>weave</em>.</strong> Tabel hasil &amp; bibliografi diregenerasi dari store.</li>
+      </ul>
+    </section>
+
+    <section id="instalasi">
+      <h2>Instalasi</h2>
+      <p>Prasyarat: <code>uv</code> (Python 3.10+); build cockpit memerlukan Node.</p>
+      <pre><code>git clone https://github.com/julianwinking/renv-ai renv
+cd renv
+uv sync
+
+# taruh paper .txt/.md/.pdf di library/, lalu:
+uv run renv index</code></pre>
+    </section>
+
+    <section id="alur">
+      <h2>Alur riset inti</h2>
+      <ol class="steps">
+        <li><strong>Daftarkan paper.</strong> <code>renv add &lt;pdf|arxiv|doi&gt;</code> lalu <code>renv index</code>.</li>
+        <li><strong>Buat klaim.</strong> <code>renv claim add &lt;proyek&gt; "teks" --kind thesis</code>.</li>
+        <li><strong>Kutip span.</strong> <code>renv cite "teks klaim" &lt;proyek&gt; --source &lt;key&gt; --write</code>.</li>
+        <li><strong>Tautkan bukti.</strong> <code>renv claim link &lt;id&gt; --cite &lt;N&gt; --stance supports</code>.</li>
+        <li><strong>Weave &amp; ekspor.</strong> <code>renv weave &lt;proyek&gt;</code> dan <code>renv export</code>.</li>
+      </ol>
+      <p class="note">
+        Tips: susun teks klaim mendekati frasa sumber — verifier <em>lexical</em>
+        default menilai tumpang tindih token, bukan entailment.
+      </p>
+    </section>
+
+    <section id="tutorial">
+      <h2>Tutorial</h2>
+      <p>Lima bab berurutan — dari instalasi sampai menghubungkan agen AI.</p>
+      <ul class="toc">
+        <li><a href="tutorial/01-instalasi"><span>01 — Instalasi &amp; Setup</span><span class="idx">prasyarat, corpus, project</span></a></li>
+        <li><a href="tutorial/02-klaim-sitasi"><span>02 — Klaim &amp; Sitasi</span><span class="idx">span anchoring, bukti, status</span></a></li>
+        <li><a href="tutorial/03-eksperimen"><span>03 — Eksperimen &amp; Run</span><span class="idx">DAG, metrics, provenance</span></a></li>
+        <li><a href="tutorial/04-manuskrip"><span>04 — Menulis Manuskrip</span><span class="idx">\spancite, weave, compile</span></a></li>
+        <li><a href="tutorial/05-mcp"><span>05 — MCP untuk AI</span><span class="idx">57 tool, AGENTS.md</span></a></li>
+      </ul>
+    </section>
+
+    <section id="mcp">
+      <h2>Menghubungkan agen lewat MCP</h2>
+      <p>Server MCP stdio menyediakan 57 tool. Contoh konfigurasi klien:</p>
+      <pre><code>{
+  "mcp": {
+    "renv": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/path/ke/renv", "renv", "mcp"],
+      "enabled": true
+    }
+  }
+}</code></pre>
+    </section>
+  </main>
+
+  <footer>
+    <p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p>
+  </footer>
+</body>
+</html>

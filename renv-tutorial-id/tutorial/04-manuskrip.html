@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bab 04 — Menulis Manuskrip · Tutorial renv</title>
+  <meta name="description" content="Menulis teks paper di folder text/, memakai \spancite, dan meregenerasi tabel hasil serta bibliografi lewat weave." />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <header class="subhead">
+    <nav class="nav">
+      <span class="brand"><a href="../">renv<span class="accent">.ai</span></a></span>
+      <ul>
+        <li><a href="../">Beranda</a></li>
+        <li><a href="01-instalasi">01 Instalasi</a></li>
+        <li><a href="02-klaim-sitasi">02 Klaim &amp; Sitasi</a></li>
+        <li><a href="03-eksperimen">03 Eksperimen</a></li>
+        <li><a href="04-manuskrip">04 Manuskrip</a></li>
+        <li><a href="05-mcp">05 MCP</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="article">
+    <p class="crumb">Tutorial · Bab 04</p>
+    <h1>Menulis Manuskrip</h1>
+    <p class="lead">
+      Teks paper hidup di <code>text/</code>. Angka dan bibliografi tidak
+      diketik — keduanya di-<em>weave</em> dari store agar manuskrip tidak bisa
+      melenceng dari data.
+    </p>
+
+    <h2>4.1 Scaffold teks</h2>
+    <pre><code>uv run renv draft span-citation      # (ulang) scaffold skeleton paper di text/
+ls projects/span-citation/text/</code></pre>
+
+    <h2>4.2 Preamble &amp; \spancite</h2>
+    <p>Cetak definisi LaTeX untuk perintah sitasi span, lalu sertakan di preamble:</p>
+    <pre><code>uv run renv preamble</code></pre>
+    <p>Sitasi yang dihasilkan <code>renv cite</code> siap ditempel ke teks:</p>
+    <pre><code>\spancite{gao2023_alce}{579}{783}{Unlike commercial search assistants that cite
+an entire web page, ALCE cites at the granularity of short hundred-word passages.}</code></pre>
+
+    <h2>4.3 Menautkan sitasi ke lokasi manuskrip</h2>
+    <p>
+      Klaim dapat diberi <code>manuscript_loc</code> agar direview tertaut ke
+      bagian teks tertentu. Review otomatis akan menandai klaim tesis yang masih
+      <em>open</em>.
+    </p>
+    <pre><code>uv run renv review span-citation      # cek per-section
+uv run renv finding list span-citation
+uv run renv finding adjudicate &lt;id&gt; --verdict accept --reasoning "..."</code></pre>
+
+    <h2>4.4 Weave: hasil + bibliografi</h2>
+    <pre><code>uv run renv weave span-citation</code></pre>
+    <p>Menghasilkan (diregenerasi dari store):</p>
+    <ul>
+      <li><code>text/results_table.tex</code> — tabel hasil dari <code>metric</code> rows.</li>
+      <li><code>text/references.bib</code> — bibliografi dari corpus.</li>
+      <li><code>text/preamble.tex</code> — definisi <code>\spancite</code>.</li>
+      <li><code>citations.json</code> — sidecar sitasi (turunan).</li>
+    </ul>
+    <div class="callout">
+      <strong>Angka diturunkan, tidak diketik.</strong> Karena tabel dan
+      bibliografi dihasilkan store, manuskrip selalu konsisten dengan run dan
+      corpus.
+    </div>
+
+    <h2>4.5 Kompilasi PDF</h2>
+    <pre><code>uv run renv compile span-citation
+# = weave + kompilasi text/ ke PDF (latexmk / tectonic / pdflatex)</code></pre>
+
+    <h2>4.6 Snapshot untuk git</h2>
+    <pre><code>uv run renv export      # snapshot JSONL deterministik ke .research/export/</code></pre>
+    <p>
+      <code>.research/env.db</code> di-<em>gitignore</em>; yang dikomit adalah
+      snapshot JSONL, sehingga diff-nya rapi dan dapat direstorasi dengan
+      <code>renv import</code>.
+    </p>
+
+    <nav class="pager">
+      <a href="03-eksperimen">← Bab 03 · Eksperimen &amp; Run</a>
+      <a href="05-mcp">Bab 05 · MCP untuk AI →</a>
+    </nav>
+  </main>
+
+  <footer><p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p></footer>
+</body>
+</html>

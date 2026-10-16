@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bab 03 — Eksperimen &amp; Run · Tutorial renv</title>
+  <meta name="description" content="Membangun DAG eksperimen dan merekam angka lewat run yang reproducible dengan provenance yang ditegakkan." />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <header class="subhead">
+    <nav class="nav">
+      <span class="brand"><a href="../">renv<span class="accent">.ai</span></a></span>
+      <ul>
+        <li><a href="../">Beranda</a></li>
+        <li><a href="01-instalasi">01 Instalasi</a></li>
+        <li><a href="02-klaim-sitasi">02 Klaim &amp; Sitasi</a></li>
+        <li><a href="03-eksperimen">03 Eksperimen</a></li>
+        <li><a href="04-manuskrip">04 Manuskrip</a></li>
+        <li><a href="05-mcp">05 MCP</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="article">
+    <p class="crumb">Tutorial · Bab 03</p>
+    <h1>Eksperimen &amp; Run</h1>
+    <p class="lead">
+      Eksperimen membentuk DAG: satu eksperimen, satu pertanyaan. Angka hasil
+      tidak boleh diketik — hanya boleh masuk lewat <code>run</code> yang
+      tercatat.
+    </p>
+
+    <h2>3.1 Membuat eksperimen (DAG)</h2>
+    <pre><code>uv run renv exp new span-citation 001-tfidf --title "TF-IDF baseline"
+uv run renv exp new span-citation 002-dense --parent 001-tfidf
+
+uv run renv exp list span-citation
+uv run renv exp show span-citation 001-tfidf</code></pre>
+    <p>
+      Gunakan <code>--parent</code> untuk bercabang alih-alih mengubah
+      eksperimen yang sudah selesai.
+    </p>
+
+    <h2>3.2 Kontrak entrypoint</h2>
+    <p>
+      Sebuah entrypoint membaca lokasi output dan parameter dari environment,
+      lalu menulis <code>metrics.json</code>:
+    </p>
+    <table>
+      <thead><tr><th>Env var</th><th>Arti</th></tr></thead>
+      <tbody>
+        <tr><td><code>RENV_RUN_DIR</code></td><td>Direktori tempat menulis <code>metrics.json</code>.</td></tr>
+        <tr><td><code>RENV_PARAMS</code></td><td>Parameter dari <code>--param</code> (JSON).</td></tr>
+      </tbody>
+    </table>
+    <p>Setiap run mem-pin <code>git sha</code>, <code>env hash</code>, dataset, config hash, dan seed.</p>
+
+    <h2>3.3 Menjalankan</h2>
+    <pre><code>uv run renv exp run span-citation 001-tfidf \
+  --entrypoint run.py --param k=8</code></pre>
+    <p>Eksperimen panjang berjalan di latar belakang sehingga tidak memblokir agen.</p>
+
+    <h2>3.4 Log keputusan &amp; invariant provenance</h2>
+    <pre><code># angka hanya boleh masuk lewat run yang tercatat
+uv run renv log add span-citation result "recall hit 0.8" --evidence run:1
+
+# audit seluruh store terhadap invariant provenance
+uv run renv log check</code></pre>
+    <div class="callout warn">
+      Sebuah entri log bertipe <code>result</code> <strong>ditolak</strong> bila
+      tidak menautkan run yang selesai. Ini menjamin provenance, bukan validitas
+      — run yang salah tetap bisa menghasilkan angka keliru.
+    </div>
+
+    <h2>3.5 Dataset</h2>
+    <pre><code>uv run renv dataset add --slug squad --path data/squad.json --version v1</code></pre>
+    <p>Dataset direkam versioned dan content-hashed; run menautkan dataset yang dipakai.</p>
+
+    <h2>3.6 Run di cluster (remote)</h2>
+    <p>
+      Bila komputasi/data tetap di cluster, daftarkan remote (alias ssh) lalu
+      ingest hasilnya dengan provenance bergradasi <code>remote</code> /
+      <code>remote-verified</code>:
+    </p>
+    <pre><code>uv run renv remote add snaga --host snaga --data-root /scratch/me
+uv run renv dataset add --slug imagenet --location ssh://snaga/data/imagenet --sha256 &lt;hash-di-cluster&gt;
+
+# setelah run di cluster
+uv run renv exp ingest span-citation 002-dense --dir runs/002-dense
+# atau tanpa membawa data pulang:
+uv run renv exp ingest span-citation 002-dense \
+  --metrics '{"recall":0.83}' --remote ssh://snaga/runs/exp42</code></pre>
+
+    <h2>3.7 Dari hasil ke paper</h2>
+    <p>
+      Angka mengalir <strong>run → metric → paper</strong> melalui
+      <code>renv weave</code> (Bab 04). Kurva per-step (TensorBoard, dsb.) adalah
+      artefak TELESCOPE — tidak pernah bisa disitasi.
+    </p>
+
+    <nav class="pager">
+      <a href="02-klaim-sitasi">← Bab 02 · Klaim &amp; Sitasi</a>
+      <a href="04-manuskrip">Bab 04 · Menulis Manuskrip →</a>
+    </nav>
+  </main>
+
+  <footer><p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p></footer>
+</body>
+</html>

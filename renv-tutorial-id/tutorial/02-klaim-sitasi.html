@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bab 02 — Klaim &amp; Sitasi · Tutorial renv</title>
+  <meta name="description" content="Membuat klaim, mengutip span sumber yang ter-anchor, dan menautkan bukti sehingga status klaim diturunkan otomatis." />
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <header class="subhead">
+    <nav class="nav">
+      <span class="brand"><a href="../">renv<span class="accent">.ai</span></a></span>
+      <ul>
+        <li><a href="../">Beranda</a></li>
+        <li><a href="01-instalasi">01 Instalasi</a></li>
+        <li><a href="02-klaim-sitasi">02 Klaim &amp; Sitasi</a></li>
+        <li><a href="03-eksperimen">03 Eksperimen</a></li>
+        <li><a href="04-manuskrip">04 Manuskrip</a></li>
+        <li><a href="05-mcp">05 MCP</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="article">
+    <p class="crumb">Tutorial · Bab 02</p>
+    <h1>Klaim &amp; Sitasi</h1>
+    <p class="lead">
+      Jantung renv: setiap klaim harus bersumber. Sitasi mengikat klaim ke
+      <em>span</em> teks yang tepat di paper sumber, dan status klaim dihitung
+      dari bukti — bukan diketik manual.
+    </p>
+
+    <h2>2.1 Konsep: span-anchored citation</h2>
+    <p>
+      Anchor sitasi adalah teks kutipan itu sendiri (W3C TextQuoteSelector +
+      TextPosition). Karena tidak bergantung pada id chunk/vektor, anchor tetap
+      valid setelah re-index atau pergantian versi dokumen. Emitted sebagai LaTeX
+      <code>\spancite{src}{start}{end}{quote}</code>.
+    </p>
+
+    <h2>2.2 Membuat klaim</h2>
+    <p>Klaim punya <code>kind</code> yang menentukan perannya dalam argumen:</p>
+    <table>
+      <thead><tr><th>Kind</th><th>Arti</th></tr></thead>
+      <tbody>
+        <tr><td><code>thesis</code></td><td>Tesis utama paper.</td></tr>
+        <tr><td><code>contribution</code></td><td>Kontribusi yang diklaim.</td></tr>
+        <tr><td><code>assertion</code></td><td>Pernyataan faktual pendukung.</td></tr>
+        <tr><td><code>hypothesis</code></td><td>Klaim yang menunggu pengujian (dipasangkan ke eksperimen).</td></tr>
+      </tbody>
+    </table>
+    <pre><code>uv run renv claim add span-citation \
+  "ALCE cites at the granularity of short hundred-word passages" \
+  --kind thesis</code></pre>
+
+    <h2>2.3 Mengutip span</h2>
+    <pre><code>uv run renv cite "ALCE cites at the granularity of short hundred-word passages" \
+  span-citation --source gao2023_alce --write</code></pre>
+    <p>Contoh keluaran:</p>
+    <pre><code>CLAIM: ALCE cites at the granularity of short hundred-word passages
+SUPPORT: full (1.0)  sim=0.5708
+SOURCE: gao2023_alce chars 579-783 (page 1)
+QUOTE: “Unlike commercial search assistants that cite an entire web page,
+ALCE cites at the granularity of short hundred-word passages…”
+citation row: #2 → paper gao2023_alce
+  link it: renv claim link &lt;claim-id&gt; --cite 2</code></pre>
+    <div class="callout warn">
+      <strong>Verifier lexical vs factcg.</strong> Verifier default
+      (<code>lexical</code>) menilai tumpang tindih token, bukan entailment —
+      parafrase yang benar bisa bernilai <code>none</code>. Untuk verifikasi
+      semantik gunakan <code>--verifier factcg</code> (butuh extra
+      <code>verify-local</code>).
+      <br />Verdict <code>none</code> ditolak tanpa <code>--force</code>.
+    </div>
+
+    <h2>2.4 Menautkan bukti ke klaim</h2>
+    <pre><code>uv run renv claim link 1 --cite 2 --stance supports --grade suggestive
+
+# stance: supports | refutes | inconclusive
+# grade:  anecdotal | suggestive | confirmatory</code></pre>
+    <p>Satu panggilan <code>cite</code> meng-anchor SATU span. Klaim dengan k
+    sumber memerlukan k ronde <code>cite</code>+<code>link</code>, masing-masing
+    dengan <code>--source</code> sendiri.</p>
+
+    <h2>2.5 Merawat sitasi</h2>
+    <pre><code>uv run renv claim list span-citation       # status diturunkan dari bukti
+uv run renv claim show 1                    # detail + bukti tertaut
+uv run renv citation list span-citation    # semua baris sitasi
+uv run renv citation rm 3 --force          # tombstone (bukan hapus; history tetap)</code></pre>
+
+    <h2>2.6 Menghubungkan antar klaim</h2>
+    <pre><code>uv run renv claim relate 2 1 --kind depends_on
+uv run renv claim relate 5 1 --kind contradicts</code></pre>
+    <p>
+      <code>depends_on</code> dan <code>contradicts</code> membentuk struktur
+      argumen (bukan bukti) dan tidak mengubah status turunan.
+    </p>
+
+    <div class="callout">
+      <strong>Trik penulisan.</strong> Susun teks klaim mendekati frasa sumber.
+      Bila tahu paper-nya, pin <code>--source &lt;key&gt;</code> agar pencarian
+      tidak melenceng.
+    </div>
+
+    <nav class="pager">
+      <a href="01-instalasi">← Bab 01 · Instalasi &amp; Setup</a>
+      <a href="03-eksperimen">Bab 03 · Eksperimen &amp; Run →</a>
+    </nav>
+  </main>
+
+  <footer><p>Dokumentasi komunitas berbahasa Indonesia untuk <a href="https://github.com/julianwinking/renv-ai">renv</a> (MIT).</p></footer>
+</body>
+</html>
