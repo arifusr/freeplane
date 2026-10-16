@@ -32,10 +32,23 @@
   #toolbar img { width: 16px; height: 16px; display: block; }
   #toolbar .tsep { width: 1px; height: 20px; background: #c4c4c4; margin: 0 4px; }
   #toolbar select { height: 22px; font-size: 12px; }
-  canvas { position: fixed; top: 54px; left: 0; width: 100%; height: calc(100% - 54px); display: block; cursor: grab; touch-action: none; }
+  /* Bilah tab (beberapa peta sekaligus). */
+  #tabbar { position: fixed; top: 54px; left: 0; right: 0; height: 26px; z-index: 28; display: flex; align-items: flex-end;
+            gap: 2px; padding: 0 5px; background: #ececec; border-bottom: 1px solid #b7b7b7; overflow-x: auto; }
+  #tabbar .tab { display: flex; align-items: center; gap: 6px; max-width: 200px; height: 22px; padding: 0 6px 0 10px;
+                 font-size: 12px; color: #333; background: #dcdcdc; border: 1px solid #b7b7b7; border-bottom: none;
+                 border-radius: 4px 4px 0 0; cursor: pointer; user-select: none; white-space: nowrap; }
+  #tabbar .tab.active { background: #fff; color: #111; font-weight: 600; height: 24px; }
+  #tabbar .tab .tname { overflow: hidden; text-overflow: ellipsis; }
+  #tabbar .tab .tclose { color: #888; font-weight: 400; padding: 0 1px; border-radius: 3px; }
+  #tabbar .tab .tclose:hover { background: #c0392b; color: #fff; }
+  #tabbar .tabadd { width: 22px; height: 22px; margin-bottom: 2px; border: 1px solid #b7b7b7; border-radius: 4px;
+                    background: #fafafa; cursor: pointer; font-size: 15px; line-height: 1; color: #444; }
+  #tabbar .tabadd:hover { background: #dcebff; border-color: #8fb4ea; }
+  canvas { position: fixed; top: 80px; left: 0; width: 100%; height: calc(100% - 80px); display: block; cursor: grab; touch-action: none; }
   canvas:active { cursor: grabbing; }
   #hint { position: fixed; bottom: 6px; left: 8px; color: #777; font-size: 11px; max-width: 70vw; z-index: 5; }
-  #panel { position: fixed; top: 60px; right: 8px; z-index: 20; width: 260px; max-height: calc(100vh - 68px);
+  #panel { position: fixed; top: 86px; right: 8px; z-index: 20; width: 260px; max-height: calc(100vh - 94px);
            overflow: auto; background: rgba(255,255,255,.96); border: 1px solid #ccc; border-radius: 8px;
            padding: 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
   #panel.hidden { display: none; }
@@ -107,8 +120,9 @@
   <span id="saveinfo" class="txt" style="margin-left:auto;color:#777;font-size:11px;padding-right:4px"></span>
   <input id="file" type="file" accept=".mm,.xml" hidden>
 </div>
+<div id="tabbar"></div>
 <div id="panel" class="hidden"></div>
-<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus)</div>
+<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
 <canvas id="cv"></canvas>
 
 <script id="seed" type="application/xml">
@@ -136,20 +150,64 @@ import { BUILTIN_ICONS } from './icons-builtin.mjs';
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 
-// --- Simpan otomatis di peramban (localStorage) ------------------------------
-// Peta disimpan tiap perubahan sehingga tetap ada sebelum diekspor ke file.
-const LS_KEY = 'freemind-web-canvas:mm.v1';
+// --- Simpan otomatis di peramban (localStorage) + tab ------------------------
+// Seluruh tab disimpan tiap perubahan sehingga tetap ada sebelum diekspor.
+const LS_KEY = 'freemind-web-canvas:tabs.v1';
+const LS_KEY_LEGACY = 'freemind-web-canvas:mm.v1';
 let lsWarned = false;
 let lsSaveTimer = null;
-function loadLocal() {
-  try { const s = localStorage.getItem(LS_KEY); if (s && s.trim()) return parseMM(s); }
-  catch (e) { /* rusak / tak tersedia */ }
-  return null;
+
+let docSeq = 0;
+function makeDoc(name, r) {
+  return { id: ++docSeq, name, root: r, selected: null, selection: new Set(),
+    view: { x: 0, y: 0, scale: 1 }, undoStack: [], redoStack: [] };
+}
+function emptyRoot() { return parseMM('<map version="1.0.1"><node TEXT="Peta baru"/></map>'); }
+
+// State dokumen AKTIF (tab terpilih). Ditukar saat ganti tab.
+let tabs = [];
+let activeTab = 0;
+let root = null;
+let selected = null;
+let selection = new Set();
+let view = { x: 0, y: 0, scale: 1 };
+let undoStack = [];
+let redoStack = [];
+
+function stashActive() {
+  const d = tabs[activeTab]; if (!d) return;
+  d.root = root; d.selected = selected; d.selection = selection;
+  d.view = view; d.undoStack = undoStack; d.redoStack = redoStack;
+}
+function adoptActive() {
+  const d = tabs[activeTab]; if (!d) return;
+  root = d.root; selected = d.selected; selection = d.selection;
+  view = d.view; undoStack = d.undoStack; redoStack = d.redoStack;
+}
+function loadState() {
+  try {
+    const s = localStorage.getItem(LS_KEY);
+    if (s) {
+      const o = JSON.parse(s);
+      if (o && Array.isArray(o.tabs) && o.tabs.length) {
+        tabs = o.tabs.map((t) => makeDoc(t.name || 'Peta', parseMM(t.mm)));
+        activeTab = Math.min(Math.max(0, o.active | 0), tabs.length - 1);
+        return true;
+      }
+    }
+    const legacy = localStorage.getItem(LS_KEY_LEGACY);
+    if (legacy && legacy.trim()) { tabs = [makeDoc('Peta 1', parseMM(legacy))]; activeTab = 0; return true; }
+  } catch (e) { /* rusak / tak tersedia */ }
+  return false;
 }
 function saveLocal() {
   lsSaveTimer = null;
+  stashActive();
   try {
-    localStorage.setItem(LS_KEY, serializeMM(root));
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      v: 1, active: activeTab,
+      tabs: tabs.map((t) => ({ name: t.name, mm: serializeMM(t.root) })),
+    }));
     const el = document.getElementById('saveinfo');
     if (el) el.textContent = 'Tersimpan di peramban ✓ ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -157,18 +215,53 @@ function saveLocal() {
   }
 }
 function scheduleSaveLocal() { clearTimeout(lsSaveTimer); lsSaveTimer = setTimeout(saveLocal, 400); }
-function clearLocal() { try { localStorage.removeItem(LS_KEY); } catch (e) {} }
+function clearLocal() { try { localStorage.removeItem(LS_KEY); localStorage.removeItem(LS_KEY_LEGACY); } catch (e) {} }
 function restoreLocal() {
-  const t = loadLocal();
-  if (!t) { alert('Tidak ada simpanan di peramban.'); return; }
-  commit(); root = t; selected = null; selection = new Set(); relayout(); fit();
+  if (!loadState()) { alert('Tidak ada simpanan di peramban.'); return; }
+  adoptActive(); updateTabbar(); relayout(); fit();
 }
 
-const savedStart = loadLocal();
-let root = savedStart || parseMM(document.getElementById('seed').textContent);
-let selected = null;
-let selection = new Set();
-let view = { x: 0, y: 0, scale: 1 };
+// --- Tab --------------------------------------------------------------------
+function updateTabbar() {
+  const bar = document.getElementById('tabbar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  tabs.forEach((t, i) => {
+    const el = document.createElement('div');
+    el.className = 'tab' + (i === activeTab ? ' active' : '');
+    el.innerHTML = `<span class="tname">${esc(t.name)}</span><span class="tclose" title="Tutup tab">×</span>`;
+    el.onclick = (e) => { if (e.target.classList.contains('tclose')) closeTab(i); else switchTab(i); };
+    el.ondblclick = (e) => { e.stopPropagation(); renameTab(i); };
+    bar.appendChild(el);
+  });
+  const add = document.createElement('button');
+  add.className = 'tabadd'; add.title = 'Tab baru (Ctrl+T)'; add.textContent = '+';
+  add.onclick = () => addTab();
+  bar.appendChild(add);
+}
+function switchTab(i) {
+  if (i === activeTab || i < 0 || i >= tabs.length) return;
+  stashActive(); activeTab = i; adoptActive(); updateTabbar(); relayout(); fit();
+}
+function addTab(name, r) {
+  stashActive();
+  tabs.push(makeDoc(name || ('Peta ' + (tabs.length + 1)), r || emptyRoot()));
+  activeTab = tabs.length - 1; adoptActive(); updateTabbar(); relayout(); fit(); scheduleSaveLocal();
+}
+function closeTab(i) {
+  if (tabs.length <= 1) { alert('Minimal satu tab harus tetap terbuka.'); return; }
+  stashActive();
+  tabs.splice(i, 1);
+  if (activeTab >= tabs.length) activeTab = tabs.length - 1; else if (activeTab > i) activeTab--;
+  adoptActive(); updateTabbar(); relayout(); fit(); scheduleSaveLocal();
+}
+function renameTab(i) {
+  const d = tabs[i]; if (!d) return;
+  const nm = prompt('Nama tab:', d.name);
+  if (nm != null && nm.trim()) { d.name = nm.trim(); updateTabbar(); scheduleSaveLocal(); }
+}
+function nextTab(d) { switchTab((activeTab + d + tabs.length) % tabs.length); }
+
 let drag = null;       // pan
 let nodeDrag = null;   // pindah node (DnD reparent/reorder)
 let moveDrag = null;   // node motion (HGAP/VSHIFT) via pegangan oval
@@ -177,8 +270,6 @@ let band = null;       // seleksi kotak (rubber-band)
 let clipboard = null;  // subtree tersalin
 let search = { q: '', hits: [], idx: -1 };
 let attrMode = 'all';  // AttributeTableLayoutModel: 'all'(extended) | 'selected' | 'hide'
-const undoStack = [];
-const redoStack = [];
 
 // Gambar ikon BUILTIN FreeMind (src/icons/*.png), dimuat lazily.
 const images = new Map();
@@ -659,7 +750,10 @@ function about() { alert('FreeMind Web Canvas — prototipe\nRekonstruksi inti F
 // Bilah menu bergaya FreeMind (padanan MenuBar.java).
 const MENUS = {
   file: [
-    { t: 'Impor .mm…', a: 'Ctrl+O', c: 'import' },
+    { t: 'Tab Baru', a: 'Ctrl+T', c: 'newtab' },
+    { t: 'Buka .mm di Tab Baru…', a: 'Ctrl+O', c: 'import' },
+    { t: 'Tutup Tab', a: 'Ctrl+W', c: 'closetab' },
+    { sep: 1 },
     { t: 'Simpan di Peramban', a: 'Ctrl+S', c: 'savelocal' },
     { t: 'Unduh .mm…', a: 'Ctrl+Shift+S', c: 'export' },
     { sep: 1 },
@@ -733,6 +827,10 @@ const MENUS = {
     { t: 'Cari…', a: 'Ctrl+F', c: 'find' },
     { t: 'Cari Berikutnya', a: 'F3', c: 'findnext' },
     { t: 'Cari Sebelumnya', a: 'Shift+F3', c: 'findprev' },
+    { sep: 1 },
+    { t: 'Tab Berikutnya', a: 'Ctrl+Tab', c: 'nexttab' },
+    { t: 'Tab Sebelumnya', a: 'Ctrl+Shift+Tab', c: 'prevtab' },
+    { t: 'Ganti Nama Tab…', c: 'renametab' },
   ],
   help: [
     { t: 'Tentang FreeMind Web Canvas', c: 'about' },
@@ -741,6 +839,11 @@ const MENUS = {
 const CMDS = {
   import: () => document.getElementById('file').click(),
   export: () => document.getElementById('export').click(),
+  newtab: () => addTab(),
+  closetab: () => closeTab(activeTab),
+  nexttab: () => nextTab(1),
+  prevtab: () => nextTab(-1),
+  renametab: () => renameTab(activeTab),
   savelocal: saveLocal,
   restorelocal: restoreLocal,
   clearlocal: () => { if (confirm('Hapus simpanan peta di peramban?')) { clearLocal(); const el = document.getElementById('saveinfo'); if (el) el.textContent = 'Simpanan dihapus'; } },
@@ -808,6 +911,11 @@ window.addEventListener('keydown', (e) => {
   else if (ctrl && e.key.toLowerCase() === 'i') { e.preventDefault(); toggleFontProp('italic'); }
   else if (ctrl && e.key.toLowerCase() === 'u') { e.preventDefault(); toggleFontProp('underline'); }
   else if (ctrl && e.key.toLowerCase() === 's') { e.preventDefault(); if (e.shiftKey) document.getElementById('export').click(); else saveLocal(); }
+  else if (ctrl && e.key.toLowerCase() === 't') { e.preventDefault(); addTab(); }
+  else if (ctrl && e.key.toLowerCase() === 'w') { e.preventDefault(); closeTab(activeTab); }
+  else if (ctrl && e.key === 'Tab') { e.preventDefault(); nextTab(e.shiftKey ? -1 : 1); }
+  else if (ctrl && e.key === 'PageDown') { e.preventDefault(); nextTab(1); }
+  else if (ctrl && e.key === 'PageUp') { e.preventDefault(); nextTab(-1); }
   else if (ctrl && e.key.toLowerCase() === 'o') { e.preventDefault(); document.getElementById('file').click(); }
   else if (e.key === 'F3') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
   else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
@@ -843,8 +951,11 @@ document.getElementById('export').onclick = () => {
 document.getElementById('import').onclick = () => document.getElementById('file').click();
 document.getElementById('file').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  commit();
-  root = parseMM(await f.text()); selected = null; selection = new Set(); relayout(); fit();
+  let tree;
+  try { tree = parseMM(await f.text()); }
+  catch (err) { alert('Gagal memuat .mm: ' + (err && err.message)); e.target.value = ''; return; }
+  addTab(f.name.replace(/\.mm$/i, '') || 'Impor', tree);
+  e.target.value = '';
 };
 
 // ---------------------------------------------------------------------------
@@ -924,6 +1035,11 @@ document.getElementById('zin').onclick = () => zoomBy(1.2);
 document.getElementById('zout').onclick = () => zoomBy(1 / 1.2);
 document.getElementById('zreset').onclick = zoomReset;
 document.getElementById('attrmode').onchange = (ev) => { attrMode = ev.target.value; relayout(); };
+
+// Inisialisasi: muat tab tersimpan, atau mulai dari contoh.
+if (!loadState()) { tabs = [makeDoc('Contoh', parseMM(document.getElementById('seed').textContent))]; activeTab = 0; }
+adoptActive();
+updateTabbar();
 
 resize();
 relayout();
