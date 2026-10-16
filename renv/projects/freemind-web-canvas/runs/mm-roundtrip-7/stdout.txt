@@ -1,0 +1,1 @@
+{"sample_roundtrip_ok":1,"nodes_total":12,"nodes_visible":11,"files_total":25,"files_parsed":25,"files_shape_ok":25,"files_layout_finite":25,"files_failed":0,"total_nodes_parsed":4965,"arrows_total":109,"clouds_total":40,"failures":0}

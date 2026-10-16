@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeMind Web Canvas — prototipe</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 14px/1.4 system-ui, sans-serif; }
+  #toolbar { position: fixed; top: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; flex-wrap: wrap;
+             background: rgba(255,255,255,.92); padding: 6px; border: 1px solid #ccc; border-radius: 8px; }
+  #toolbar button { padding: 4px 8px; }
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #hint { position: fixed; bottom: 8px; left: 8px; color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="import">Impor .mm</button>
+  <button id="export">Ekspor .mm</button>
+  <button id="fit">Fit</button>
+  <button id="child">+ Anak (Tab)</button>
+  <button id="sibling">+ Saudara (Enter)</button>
+  <button id="del">Hapus</button>
+  <button id="undo">Undo</button>
+  <button id="redo">Redo</button>
+  <input id="file" type="file" accept=".mm,.xml" hidden>
+</div>
+<div id="hint">Klik pilih · dobel-klik edit · drag node ke node lain = pindah · Space fold · Enter/Del/Tab · Ctrl+Z / Ctrl+Shift+Z · scroll zoom · drag latar = pan</div>
+<canvas id="cv"></canvas>
+
+<script id="seed" type="application/xml">
+<map version="1.1.0">
+<node TEXT="FreeMind Web Canvas">
+	<node TEXT="Renderer" POSITION="right" ID="n-renderer">
+		<node TEXT="Canvas 2D"/>
+		<node TEXT="Bezier edge"/>
+	</node>
+	<node TEXT="Model" POSITION="left" STYLE="bubble" ID="n-model">
+		<node TEXT="Node tree"/>
+		<node TEXT=".mm parse/emit"/>
+		<cloud COLOR="#ffff33"/>
+	</node>
+	<arrowlink DESTINATION="n-model" COLOR="#6600ff" ENDARROW="Default" STARTINCLINATION="30;0;" ENDINCLINATION="30;0;"/>
+</node>
+</map>
+</script>
+
+<script type="module">
+import { parseMM, serializeMM, layout, render, visibleNodes, hitTest, boundingBox, setMeasure, SPACE_AROUND }
+  from './freemind-core.mjs';
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let root = parseMM(document.getElementById('seed').textContent);
+let selected = null;
+let view = { x: 0, y: 0, scale: 1 };
+let drag = null;       // pan
+let nodeDrag = null;   // pindah node
+const undoStack = [];
+const redoStack = [];
+
+const makeNode = (position = null) => ({ text: 'Node baru', folded: false, position, style: null, color: null,
+  bg: null, edge: null, font: null, icons: [], rich: null, note: null, cloud: null, arrowlinks: [],
+  attrs: [], children: [], hGap: 20, vGap: 3, shiftY: 0 });
+
+function commit() { undoStack.push(serializeMM(root)); if (undoStack.length > 200) undoStack.shift(); redoStack.length = 0; }
+function undo() { if (!undoStack.length) return; redoStack.push(serializeMM(root)); root = parseMM(undoStack.pop()); selected = null; relayout(); }
+function redo() { if (!redoStack.length) return; undoStack.push(serializeMM(root)); root = parseMM(redoStack.pop()); selected = null; relayout(); }
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+  draw();
+}
+window.addEventListener('resize', resize);
+
+setMeasure((node) => {
+  ctx.font = '14px sans-serif';
+  return { w: Math.max(30, ctx.measureText(node.text).width + 16), h: 22 };
+});
+
+function relayout() { if (root) layout(root); draw(); }
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.scale, view.scale);
+  if (root) render(ctx, root, { selectedNode: selected });
+  if (nodeDrag && nodeDrag.target) {
+    const t = nodeDrag.target;
+    ctx.save();
+    ctx.strokeStyle = '#ff3b30';
+    ctx.lineWidth = 2 / view.scale;
+    ctx.setLineDash([6 / view.scale, 4 / view.scale]);
+    if (nodeDrag.mode === 'before' || nodeDrag.mode === 'after') {
+      const y = nodeDrag.mode === 'before' ? t._contentY : t._contentY + t._h;
+      ctx.beginPath();
+      ctx.moveTo(t._contentX, y);
+      ctx.lineTo(t._contentX + t._w, y);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(t._contentX, t._contentY, t._w, t._h);
+    }
+    ctx.restore();
+  }
+}
+
+const toWorld = (ev) => {
+  const r = cv.getBoundingClientRect();
+  return { x: (ev.clientX - r.left - view.x) / view.scale, y: (ev.clientY - r.top - view.y) / view.scale };
+};
+const isDescendant = (anc, n) => { let p = n._parent; while (p) { if (p === anc) return true; p = p._parent; } return false; };
+
+function fit() {
+  if (!root) return;
+  const bb = boundingBox(root);
+  const w = bb.maxX - bb.minX + 2 * SPACE_AROUND, h = bb.maxY - bb.minY + 2 * SPACE_AROUND;
+  view.scale = Math.min(innerWidth / w, innerHeight / h, 1.5);
+  view.x = (innerWidth - (bb.minX + bb.maxX) * view.scale) / 2;
+  view.y = (innerHeight - (bb.minY + bb.maxY) * view.scale) / 2;
+  draw();
+}
+
+cv.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const w = toWorld(e);
+  const hit = hitTest(root, w.x, w.y);
+  if (hit) { selected = hit; nodeDrag = { node: hit, moved: false, target: null, world: w }; draw(); }
+  else { drag = { x: e.clientX - view.x, y: e.clientY - view.y }; }
+});
+window.addEventListener('mousemove', (e) => {
+  if (drag) { view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw(); return; }
+  if (nodeDrag) {
+    const w = toWorld(e);
+    nodeDrag.moved = true;
+    nodeDrag.world = w;
+    const t = hitTest(root, w.x, w.y);
+    const valid = t && t !== nodeDrag.node && !isDescendant(nodeDrag.node, t);
+    nodeDrag.target = valid ? t : null;
+    if (!valid) nodeDrag.mode = null;
+    else if (!t._parent) nodeDrag.mode = 'child';
+    else {
+      const relY = w.y - t._contentY;
+      nodeDrag.mode = relY < t._h / 3 ? 'before' : (relY > t._h * 2 / 3 ? 'after' : 'child');
+    }
+    draw();
+  }
+});
+window.addEventListener('mouseup', () => {
+  if (nodeDrag) {
+    if (nodeDrag.moved && nodeDrag.target) {
+      commit();
+      const t = nodeDrag.target;
+      const parent = nodeDrag.node._parent;
+      if (parent) parent.children.splice(parent.children.indexOf(nodeDrag.node), 1);
+      if (nodeDrag.mode === 'before' || nodeDrag.mode === 'after') {
+        const tp = t._parent;
+        const at = tp.children.indexOf(t) + (nodeDrag.mode === 'after' ? 1 : 0);
+        nodeDrag.node.position = t.position;
+        tp.children.splice(at, 0, nodeDrag.node);
+      } else {
+        nodeDrag.node.position = nodeDrag.world.x < t._contentX + t._w / 2 ? 'left' : 'right';
+        t.children.push(nodeDrag.node);
+        t.folded = false;
+      }
+      selected = nodeDrag.node;
+      relayout();
+    }
+    nodeDrag = null;
+  }
+  drag = null;
+});
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  view.x = mx - (mx - view.x) * factor;
+  view.y = my - (my - view.y) * factor;
+  view.scale *= factor;
+  draw();
+}, { passive: false });
+cv.addEventListener('dblclick', () => {
+  if (!selected) return;
+  const t = prompt('Teks node:', selected.text);
+  if (t !== null && t !== selected.text) { commit(); selected.text = t; relayout(); }
+});
+
+function addChild() {
+  if (!selected) return;
+  commit();
+  const n = makeNode(selected._side === 'left' ? 'left' : null);
+  selected.children.push(n);
+  selected.folded = false;
+  selected = n;
+  relayout();
+}
+function addSibling() {
+  if (!selected || !selected._parent) return;
+  commit();
+  const n = makeNode(selected.position);
+  selected._parent.children.push(n);
+  selected = n;
+  relayout();
+}
+function remove() {
+  if (!selected || !selected._parent) return;
+  commit();
+  const p = selected._parent;
+  p.children.splice(p.children.indexOf(selected), 1);
+  selected = p;
+  relayout();
+}
+function fold() { if (selected && selected.children.length) { commit(); selected.folded = !selected.folded; relayout(); } }
+
+window.addEventListener('keydown', (e) => {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+  else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
+  else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
+  else if (e.key === 'Delete') remove();
+  else if (e.key === ' ') { e.preventDefault(); fold(); }
+});
+
+document.getElementById('child').onclick = addChild;
+document.getElementById('sibling').onclick = addSibling;
+document.getElementById('del').onclick = remove;
+document.getElementById('fit').onclick = fit;
+document.getElementById('undo').onclick = undo;
+document.getElementById('redo').onclick = redo;
+document.getElementById('export').onclick = () => {
+  const blob = new Blob([serializeMM(root)], { type: 'application/xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'mindmap.mm'; a.click();
+};
+document.getElementById('import').onclick = () => document.getElementById('file').click();
+document.getElementById('file').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  commit();
+  root = parseMM(await f.text()); selected = null; relayout(); fit();
+};
+
+resize();
+relayout();
+fit();
+</script>
+</body>
+</html>

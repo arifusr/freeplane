@@ -1,0 +1,1 @@
+{"completed": "2026-10-16T06:35:39+00:00", "created": "2026-10-16T06:25:56+00:00", "hypothesis": "Parser/emitter .mm round-trip stabil dan layout menghasilkan koordinat finite untuk struktur kiri/kanan.", "id": 1, "parent_id": null, "project_id": 3, "slug": "mm-roundtrip", "status": "done", "title": "Uji round-trip .mm + sanity layout"}

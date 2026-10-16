@@ -1,0 +1,18 @@
+node:fs:2482
+    return binding.writeFileUtf8(
+                   ^
+
+Error: ENOENT: no such file or directory, open 'projects/freemind-web-canvas/runs/mm-roundtrip-7/mindmap.svg'
+    at writeFileSync (node:fs:2482:20)
+    at file:///home/arifusr/renv/projects/freemind-web-canvas/test/render_svg.mjs:12:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'projects/freemind-web-canvas/runs/mm-roundtrip-7/mindmap.svg'
+}
+
+Node.js v24.21.0
+test/render_svg.mjs gagal (exit 1)
