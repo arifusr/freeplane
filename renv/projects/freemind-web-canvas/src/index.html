@@ -5,14 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FreeMind Web Canvas — prototipe</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; font: 14px/1.4 system-ui, sans-serif; }
-  #toolbar { position: fixed; top: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; flex-wrap: wrap;
-             background: rgba(255,255,255,.92); padding: 6px; border: 1px solid #ccc; border-radius: 8px; }
-  #toolbar button { padding: 4px 8px; }
-  canvas { display: block; cursor: grab; touch-action: none; width: 100%; height: 100%; }
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; background: #fff; }
+  /* Bilah menu + toolbar bergaya Swing/FreeMind. */
+  #menubar { position: fixed; top: 0; left: 0; right: 0; height: 24px; z-index: 30; display: flex; align-items: stretch;
+             background: linear-gradient(#f6f6f6, #e4e4e4); border-bottom: 1px solid #b7b7b7; }
+  #menubar .menu { position: relative; display: flex; align-items: center; padding: 0 10px; cursor: default;
+                   user-select: none; color: #1a1a1a; }
+  #menubar .menu:hover, #menubar .menu.open { background: #cfe3ff; }
+  #menubar .dropdown { display: none; position: absolute; top: 100%; left: 0; min-width: 220px; background: #fff;
+                       border: 1px solid #9a9a9a; box-shadow: 2px 2px 5px rgba(0,0,0,.3); padding: 3px 0; z-index: 31; }
+  #menubar .menu.open .dropdown { display: block; }
+  #menubar .item { display: flex; justify-content: space-between; gap: 24px; padding: 3px 26px 3px 22px;
+                   white-space: nowrap; font-size: 12px; color: #1a1a1a; }
+  #menubar .item:hover:not(.disabled) { background: #316ac5; color: #fff; }
+  #menubar .item.disabled { color: #a0a0a0; }
+  #menubar .item .accel { color: #888; font-size: 11px; }
+  #menubar .item:hover:not(.disabled) .accel { color: #dbe6ff; }
+  #menubar .sep { height: 1px; background: #e0e0e0; margin: 4px 8px; }
+  #menubar .item .ck { position: absolute; left: 8px; font-size: 11px; }
+  #toolbar { position: fixed; top: 24px; left: 0; right: 0; height: 30px; z-index: 29; display: flex; align-items: center;
+             gap: 1px; padding: 0 5px; background: linear-gradient(#fbfbfb, #ececec); border-bottom: 1px solid #b7b7b7; }
+  #toolbar button { width: 26px; height: 26px; padding: 0; border: 1px solid transparent; background: transparent;
+                    display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 2px; }
+  #toolbar button:hover:not(:disabled) { border-color: #8fb4ea; background: #dcebff; }
+  #toolbar button:disabled { opacity: .4; cursor: default; }
+  #toolbar img { width: 16px; height: 16px; display: block; }
+  #toolbar .tsep { width: 1px; height: 20px; background: #c4c4c4; margin: 0 4px; }
+  #toolbar select { height: 22px; font-size: 12px; }
+  canvas { position: fixed; top: 54px; left: 0; width: 100%; height: calc(100% - 54px); display: block; cursor: grab; touch-action: none; }
   canvas:active { cursor: grabbing; }
-  #hint { position: fixed; bottom: 8px; left: 8px; color: #666; font-size: 12px; max-width: 70vw; }
-  #panel { position: fixed; top: 8px; right: 8px; z-index: 10; width: 260px; max-height: calc(100vh - 16px);
+  #hint { position: fixed; bottom: 6px; left: 8px; color: #777; font-size: 11px; max-width: 70vw; z-index: 5; }
+  #panel { position: fixed; top: 60px; right: 8px; z-index: 20; width: 260px; max-height: calc(100vh - 68px);
            overflow: auto; background: rgba(255,255,255,.96); border: 1px solid #ccc; border-radius: 8px;
            padding: 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
   #panel.hidden { display: none; }
@@ -35,24 +58,46 @@
 </style>
 </head>
 <body>
+<div id="menubar">
+  <div class="menu" data-menu="file">File</div>
+  <div class="menu" data-menu="edit">Edit</div>
+  <div class="menu" data-menu="view">View</div>
+  <div class="menu" data-menu="insert">Insert</div>
+  <div class="menu" data-menu="format">Format</div>
+  <div class="menu" data-menu="navigate">Navigate</div>
+  <div class="menu" data-menu="help">Help</div>
+</div>
 <div id="toolbar">
-  <button id="import">Impor .mm</button>
-  <button id="export">Ekspor .mm</button>
-  <button id="fit">Fit</button>
-  <button id="child">+ Anak (Tab)</button>
-  <button id="sibling">+ Saudara (Enter)</button>
-  <button id="del">Hapus</button>
-  <button id="copy">Salin (Ctrl+C)</button>
-  <button id="paste">Tempel (Ctrl+V)</button>
-  <button id="dup">Duplikat (Ctrl+D)</button>
-  <button id="find">Cari (Ctrl+F)</button>
-  <button id="foldall">Fold all</button>
-  <button id="unfoldall">Unfold all</button>
-  <button id="undo">Undo</button>
-  <button id="redo">Redo</button>
-  <button id="zout" title="Zoom out">−</button>
-  <button id="zin" title="Zoom in">+</button>
-  <button id="zreset" title="Zoom 100%">100%</button>
+  <button id="import" title="Impor .mm (Ctrl+O)"><img src="ui/fileopen.png" alt="Impor"></button>
+  <button id="export" title="Ekspor .mm (Ctrl+S)"><img src="ui/filesave.png" alt="Ekspor"></button>
+  <span class="tsep"></span>
+  <button id="undo" title="Undo (Ctrl+Z)"><img src="ui/undo.png" alt="Undo"></button>
+  <button id="redo" title="Redo (Ctrl+Y)"><img src="ui/redo.png" alt="Redo"></button>
+  <span class="tsep"></span>
+  <button id="copy" title="Salin (Ctrl+C)"><img src="ui/editcopy.png" alt="Salin"></button>
+  <button id="cut" title="Potong (Ctrl+X)"><img src="ui/editcut.png" alt="Potong"></button>
+  <button id="paste" title="Tempel (Ctrl+V)"><img src="ui/editpaste.png" alt="Tempel"></button>
+  <button id="dup" title="Duplikat (Ctrl+D)"><img src="ui/edit_add.png" alt="Duplikat"></button>
+  <button id="del" title="Hapus (Del)"><img src="ui/editdelete.png" alt="Hapus"></button>
+  <span class="tsep"></span>
+  <button id="child" title="Anak baru (Tab)"><img src="ui/newNode.png" alt="Anak"></button>
+  <button id="sibling" title="Saudara baru (Enter)"><img src="ui/edit_add.png" alt="Saudara"></button>
+  <span class="tsep"></span>
+  <button id="bold" title="Tebal (Ctrl+B)"><img src="ui/Bold16.gif" alt="Tebal"></button>
+  <button id="italic" title="Miring (Ctrl+I)"><img src="ui/Italic16.gif" alt="Miring"></button>
+  <button id="underline" title="Garis bawah (Ctrl+U)"><img src="ui/Underline24.gif" alt="Garis bawah"></button>
+  <button id="cloud" title="Awan"><img src="ui/Cloud24.gif" alt="Awan"></button>
+  <button id="edgecolor" title="Warna edge"><img src="ui/Colors24.gif" alt="Warna"></button>
+  <span class="tsep"></span>
+  <button id="foldall" title="Lipat semua"><img src="ui/Folded.png" alt="Lipat semua"></button>
+  <button id="unfoldall" title="Buka semua"><img src="ui/unfold.png" alt="Buka semua"></button>
+  <button id="find" title="Cari (Ctrl+F)"><img src="ui/filefind.png" alt="Cari"></button>
+  <span class="tsep"></span>
+  <button id="fit" title="Fit"><img src="ui/filter.gif" alt="Fit"></button>
+  <button id="zout" title="Zoom out"><img src="ui/ZoomOut24.gif" alt="Zoom out"></button>
+  <button id="zin" title="Zoom in"><img src="ui/ZoomIn24.gif" alt="Zoom in"></button>
+  <button id="zreset" class="txt" title="Zoom 100%">100%</button>
+  <span class="tsep"></span>
   <select id="attrmode" title="Atribut: tampilkan">
     <option value="all">Atribut: semua</option>
     <option value="selected">Atribut: terpilih</option>
@@ -555,7 +600,162 @@ function startSearch() {
   findNext(1);
 }
 
+// ---------------------------------------------------------------------------
+// Aksi seleksi & format (padanan SelectAll/SelectBranch, NodeStyleAction,
+// EdgeStyleAction, CloudAction, Font* actions).
+// ---------------------------------------------------------------------------
+function selectAll() {
+  selection = new Set(visibleNodes(root));
+  if (!selected || !selection.has(selected)) selected = selection.size ? [...selection][0] : null;
+  draw(); renderPanel();
+}
+function selectBranch() {
+  if (!selected) return;
+  const s = new Set();
+  (function rec(x) { s.add(x); for (const c of x.children) rec(c); })(selected);
+  selection = s; draw(); renderPanel();
+}
+function moveToRoot() { if (!root) return; selected = root; selection = new Set([root]); centerOn(root); draw(); renderPanel(); }
+function setStyleCmd(v) { if (selected) mutate(() => { selected.style = v || null; }); }
+function setEdgeStyleCmd(v) { if (selected) mutate(() => { selected.edge = { ...(selected.edge || {}), style: v }; }); }
+function toggleFontProp(prop) { if (selected) mutate(() => { selected.font = { ...(selected.font || {}), [prop]: !(selected.font && selected.font[prop]) }; }); }
+function toggleCloud() { if (selected) mutate(() => { selected.cloud = selected.cloud ? null : 'cloud'; }); }
+function focusPanel(sel) { if (!selected) return; renderPanel(); const el = panel.querySelector(sel); if (el) el.focus(); }
+function focusPanelInput(sel) { if (!selected) return; renderPanel(); const el = panel.querySelector(sel); if (el) { el.focus(); try { el.showPicker && el.showPicker(); } catch (e) {} } }
+function about() { alert('FreeMind Web Canvas — prototipe\nRekonstruksi inti FreeMind (Java/Swing) ke Canvas 2D.\nIkon & perilaku mengikuti FreeMind (GPLv2).'); }
+
+// Bilah menu bergaya FreeMind (padanan MenuBar.java).
+const MENUS = {
+  file: [
+    { t: 'Impor .mm…', a: 'Ctrl+O', c: 'import' },
+    { t: 'Ekspor .mm…', a: 'Ctrl+S', c: 'export' },
+    { sep: 1 },
+    { t: 'Baru', a: 'Ctrl+N', disabled: 1 },
+    { t: 'Buka…', a: 'Ctrl+O', disabled: 1 },
+    { t: 'Cetak…', a: 'Ctrl+P', disabled: 1 },
+  ],
+  edit: [
+    { t: 'Undo', a: 'Ctrl+Z', c: 'undo' },
+    { t: 'Redo', a: 'Ctrl+Y', c: 'redo' },
+    { sep: 1 },
+    { t: 'Potong', a: 'Ctrl+X', c: 'cut' },
+    { t: 'Salin', a: 'Ctrl+C', c: 'copy' },
+    { t: 'Tempel', a: 'Ctrl+V', c: 'paste' },
+    { t: 'Duplikat', a: 'Ctrl+D', c: 'dup' },
+    { sep: 1 },
+    { t: 'Hapus', a: 'Del', c: 'del' },
+    { sep: 1 },
+    { t: 'Pilih Semua', a: 'Ctrl+A', c: 'selectall' },
+    { t: 'Pilih Cabang', c: 'selectbranch' },
+  ],
+  view: [
+    { t: 'Zoom In', a: 'Ctrl++', c: 'zoomin' },
+    { t: 'Zoom Out', a: 'Ctrl+-', c: 'zoomout' },
+    { t: 'Zoom 100%', c: 'zoom100' },
+    { t: 'Fit', c: 'fit' },
+    { sep: 1 },
+    { t: 'Lipat Semua', c: 'foldall' },
+    { t: 'Buka Semua', c: 'unfoldall' },
+    { sep: 1 },
+    { t: 'Atribut: semua', c: 'attrs', v: 'all', checked: attrMode === 'all' },
+    { t: 'Atribut: terpilih', c: 'attrs', v: 'selected', checked: attrMode === 'selected' },
+    { t: 'Atribut: sembunyi', c: 'attrs', v: 'hide', checked: attrMode === 'hide' },
+  ],
+  insert: [
+    { t: 'Anak Baru', a: 'Tab', c: 'child' },
+    { t: 'Saudara Baru', a: 'Enter', c: 'sibling' },
+    { sep: 1 },
+    { t: 'Catatan…', c: 'note' },
+    { t: 'Ikon', c: 'icons' },
+    { t: 'Atribut Baru', c: 'attr' },
+    { t: 'Awan', c: 'cloud' },
+  ],
+  format: [
+    { t: 'Tebal', a: 'Ctrl+B', c: 'bold' },
+    { t: 'Miring', a: 'Ctrl+I', c: 'italic' },
+    { t: 'Garis Bawah', a: 'Ctrl+U', c: 'underline' },
+    { sep: 1 },
+    { t: 'Gaya: default', c: 'style', v: '' },
+    { t: 'Gaya: fork', c: 'style', v: 'fork' },
+    { t: 'Gaya: bubble', c: 'style', v: 'bubble' },
+    { t: 'Gaya: combined', c: 'style', v: 'combined' },
+    { t: 'Gaya: as_parent', c: 'style', v: 'as_parent' },
+    { sep: 1 },
+    { t: 'Edge: linear', c: 'edgestyle', v: 'linear' },
+    { t: 'Edge: bezier', c: 'edgestyle', v: 'bezier' },
+    { t: 'Edge: sharp_linear', c: 'edgestyle', v: 'sharp_linear' },
+    { t: 'Edge: sharp_bezier', c: 'edgestyle', v: 'sharp_bezier' },
+    { sep: 1 },
+    { t: 'Warna Node…', c: 'nodecolor' },
+    { t: 'Warna Latar…', c: 'nodebg' },
+    { t: 'Warna Edge…', c: 'edgecolor' },
+    { t: 'Ikon…', c: 'icons' },
+  ],
+  navigate: [
+    { t: 'Ke Akar', c: 'movetoroot' },
+    { sep: 1 },
+    { t: 'Cari…', a: 'Ctrl+F', c: 'find' },
+    { t: 'Cari Berikutnya', a: 'F3', c: 'findnext' },
+    { t: 'Cari Sebelumnya', a: 'Shift+F3', c: 'findprev' },
+  ],
+  help: [
+    { t: 'Tentang FreeMind Web Canvas', c: 'about' },
+  ],
+};
+const CMDS = {
+  import: () => document.getElementById('file').click(),
+  export: () => document.getElementById('export').click(),
+  undo, redo, cut: cutNode, copy: copyNode, paste: pasteNode, dup: duplicateNode, del: remove,
+  selectall: selectAll, selectbranch: selectBranch,
+  child: addChild, sibling: addSibling,
+  note: () => focusPanel('#p-note'),
+  icons: () => { if (!selected) return; renderPanel(); const l = panel.querySelector('#p-iconlist'); if (l) l.style.display = 'flex'; },
+  attr: () => { if (selected) mutate(() => selected.attrs.push({ name: 'nama', value: 'nilai' })); },
+  cloud: toggleCloud,
+  bold: () => toggleFontProp('bold'), italic: () => toggleFontProp('italic'), underline: () => toggleFontProp('underline'),
+  style: (v) => setStyleCmd(v), edgestyle: (v) => setEdgeStyleCmd(v),
+  nodecolor: () => focusPanelInput('#p-color'), nodebg: () => focusPanelInput('#p-bg'), edgecolor: () => focusPanelInput('#p-ec'),
+  attrs: (v) => { attrMode = v; document.getElementById('attrmode').value = v; relayout(); buildMenu(); },
+  zoomin: () => zoomBy(1.2), zoomout: () => zoomBy(1 / 1.2), zoom100: zoomReset, fit,
+  foldall: () => { commit(); foldAll(root, true); relayout(); },
+  unfoldall: () => { commit(); foldAll(root, false); relayout(); },
+  movetoroot: moveToRoot, find: startSearch,
+  findnext: () => findNext(1), findprev: () => findNext(-1),
+  about,
+};
+let menuActive = false;
+function closeMenus() { document.querySelectorAll('#menubar .menu.open').forEach((m) => m.classList.remove('open')); menuActive = false; }
+function openMenu(m) { closeMenus(); m.classList.add('open'); menuActive = true; }
+function runCmd(c, v) { const f = CMDS[c]; if (f) f(v); }
+function buildMenu() {
+  const bar = document.getElementById('menubar');
+  bar.querySelectorAll('.menu').forEach((m) => {
+    m.querySelectorAll('.dropdown').forEach((d) => d.remove());
+    const dd = document.createElement('div'); dd.className = 'dropdown';
+    for (const it of (MENUS[m.dataset.menu] || [])) {
+      if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; dd.appendChild(s); continue; }
+      const el = document.createElement('div');
+      el.className = 'item' + (it.disabled ? ' disabled' : '');
+      el.innerHTML = `<span class="ck" style="position:absolute;left:6px">${it.checked ? '✓' : ''}</span><span>${it.t}</span><span class="accel">${it.a || ''}</span>`;
+      el.style.position = 'relative';
+      if (!it.disabled) el.onclick = () => { closeMenus(); runCmd(it.c, it.v); };
+      dd.appendChild(el);
+    }
+    m.appendChild(dd);
+    if (!m._wired) {
+      m._wired = true;
+      // Klik = buka (bukan toggle: hover sudah bisa membuka, toggle akan menutupnya lagi).
+      m.onmousedown = (e) => { e.stopPropagation(); openMenu(m); };
+      m.onclick = (e) => e.stopPropagation();
+      m.onmouseenter = () => { if (menuActive) openMenu(m); };
+    }
+  });
+  document.addEventListener('click', closeMenus);
+}
+buildMenu();
+
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeMenus(); return; }
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
@@ -564,6 +764,12 @@ window.addEventListener('keydown', (e) => {
   else if (ctrl && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteNode(); }
   else if (ctrl && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateNode(); }
   else if (ctrl && e.key.toLowerCase() === 'f') { e.preventDefault(); startSearch(); }
+  else if (ctrl && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); }
+  else if (ctrl && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleFontProp('bold'); }
+  else if (ctrl && e.key.toLowerCase() === 'i') { e.preventDefault(); toggleFontProp('italic'); }
+  else if (ctrl && e.key.toLowerCase() === 'u') { e.preventDefault(); toggleFontProp('underline'); }
+  else if (ctrl && e.key.toLowerCase() === 's') { e.preventDefault(); document.getElementById('export').click(); }
+  else if (ctrl && e.key.toLowerCase() === 'o') { e.preventDefault(); document.getElementById('file').click(); }
   else if (e.key === 'F3') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
   else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
   else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
@@ -573,6 +779,12 @@ window.addEventListener('keydown', (e) => {
 
 document.getElementById('child').onclick = addChild;
 document.getElementById('sibling').onclick = addSibling;
+document.getElementById('cut').onclick = cutNode;
+document.getElementById('bold').onclick = () => toggleFontProp('bold');
+document.getElementById('italic').onclick = () => toggleFontProp('italic');
+document.getElementById('underline').onclick = () => toggleFontProp('underline');
+document.getElementById('cloud').onclick = toggleCloud;
+document.getElementById('edgecolor').onclick = () => focusPanelInput('#p-ec');
 document.getElementById('del').onclick = remove;
 document.getElementById('copy').onclick = copyNode;
 document.getElementById('paste').onclick = pasteNode;

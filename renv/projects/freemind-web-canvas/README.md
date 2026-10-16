@@ -5,8 +5,9 @@ dari riset source FreeMind commit `a3674b0`. Tanpa backend.
 
 ## Isi
 - `src/freemind-core.mjs` — model node, parser/emitter `.mm` (raw richcontent), layout, renderer Canvas 2D + **renderer SVG headless** (`renderSVG`), hit-test.
-- `src/index.html` — demo interaktif: pan/zoom/select/edit/add/delete/fold/undo-redo, impor/ekspor `.mm`, **node motion** (oland tepi = Hgap/Vshift, Ctrl = jarak saudara, dobel-klik reset), **drag-drop** dengan ghost (drop: tengah = anak / tepi-dalam menghadap root = sisip sebelum sibling), **multi-select** (Shift+klik, Shift+seret latar = kotak seleksi), **clipboard** (Ctrl+C/X/V/D), **pencarian** (Ctrl+F, F3 / Shift+F3), **hyperlink** (Ctrl+klik buka), **ikon node** + penanda catatan/link, klik lingkaran tepi = fold, tombol Fold all / Unfold all, gaya edge & font lengkap; **panel inspektur** kanan: catatan, pemilih ikon, warna node/latar, gaya node, edge (gaya/lebar/warna), font (ukuran/keluarga/bold/italic/underline), **atribut** (tambah/edit/hapus) dengan mode tampil (semua/terpilih/sembunyi) dan render inline di bawah node; tombol zoom ±/100%; input Pointer Events + pan sentuh & pinch-zoom, `touch-action:none`.
+- `src/index.html` — demo interaktif bergaya FreeMind: **bilah menu** (File/Edit/View/Insert/Format/Navigate/Help) + **toolbar ikon**, pan/zoom/select/edit/add/delete/fold/undo-redo, impor/ekspor `.mm`, **node motion** (oland tepi = Hgap/Vshift, Ctrl = jarak saudara, dobel-klik reset), **drag-drop** dengan ghost (drop: tengah = anak / tepi-dalam menghadap root = sisip sebelum sibling), **multi-select** (Shift+klik, Shift+seret latar = kotak seleksi), **clipboard** (Ctrl+C/X/V/D), **pencarian** (Ctrl+F, F3 / Shift+F3), **hyperlink** (Ctrl+klik buka), **ikon node** + penanda catatan/link (ikon di sisi **menghadap root**, sesuai `NodeView.updateIconPosition`), klik lingkaran tepi = fold, tombol Fold all / Unfold all, gaya edge & font lengkap; **panel inspektur** kanan: catatan, pemilih ikon, warna node/latar, gaya node, edge (gaya/lebar/warna), font (ukuran/keluarga/bold/italic/underline), **atribut** (tambah/edit/hapus) dengan mode tampil (semua/terpilih/sembunyi) dan render inline di bawah node; tombol zoom ±/100%; input Pointer Events + pan sentuh & pinch-zoom, `touch-action:none`.
 - `src/icons/` + `src/icons-builtin.mjs` — 79 ikon BUILTIN FreeMind (disalin dari `freemind/images/` + `images/icons/`; urutan ikon & ikon link mengikuti `NodeView.updateIcons`).
+- `src/ui/` — ikon toolbar FreeMind (file/new/open/save, edit cut/copy/paste, undo/redo, bold/italic/underline, cloud, fold, zoom, find) untuk bilah toolbar bergaya Swing.
 - `src/sample.mm` — contoh peta.
 - `test/roundtrip.mjs` — uji round-trip parser/emitter + sanity layout atas contoh dan 25 file `.mm` asli FreeMind.
 - `test/render_svg.mjs` — render contoh ke `mindmap.svg` (artefak headless).
@@ -31,9 +32,11 @@ python3 -m http.server 8000             # lalu buka src/index.html
 | node motion (Hgap/Vshift) | `NodeMotionListenerView`, `MindMapNodeMotionListener` |
 | ikon & fold indicator | `NodeView.updateIcons`, `MultipleImage`, `NodeFoldingComponent` |
 | clipboard | `ClipboardController`, `PasteAction.insertNodeInto` |
+| bilah menu | `controller/MenuBar.java` |
+| posisi ikon node | `NodeView.updateIconPosition` (`isLeft ? LEADING : TRAILING`) |
 
 ## Lisensi aset
-`src/icons/*.png` berasal dari FreeMind (GPLv2) → distribusi turunan wajib patuh GPL.
+`src/icons/*.png` dan `src/ui/*` berasal dari FreeMind (GPLv2) → distribusi turunan wajib patuh GPL.
 
 Catatan riset lengkap tersimpan di knowledge base renv (project `freemind-web-canvas`).
 

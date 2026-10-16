@@ -27,6 +27,20 @@ m.link_icon_exec_ok = iconKeys(n).at(-1) === 'Executable' ? 1 : 0;
 // 2) lebar baris ikon = jumlah ikon * ICON_SIZE
 m.icon_row_width_ok = iconRowWidth({ icons: ['a', 'b', 'c'], note: null, link: null }) === 3 * ICON_SIZE ? 1 : 0;
 
+// 2b) sisi ikon = sisi MENGHADAP root (NodeView.updateIconPosition:
+//     kanan -> LEADING? tidak: isLeft?LEADING:TRAILING, jadi kanan = ikon kiri teks).
+const ir = createNode('R');
+const irR = createNode('Kanan'); irR.icons = ['help']; irR.position = 'right';
+const irL = createNode('Kiri'); irL.icons = ['help']; irL.position = 'left';
+ir.children = [irR, irL];
+layout(ir);
+const isvg = renderSVG(ir, { images: { help: { width: 16, height: 16 } } });
+const imgXs = [...isvg.matchAll(/<image[^>]*x="(-?[\d.]+)"/g)].map((x) => parseFloat(x[1]));
+const txtRt = parseFloat((isvg.match(/<text x="(-?[\d.]+)"[^>]*>Kanan</) || [])[1]);
+const txtLt = parseFloat((isvg.match(/<text x="(-?[\d.]+)"[^>]*>Kiri</) || [])[1]);
+m.icon_side_ok = (irR._side === 'right' && imgXs.some((x) => x < txtRt)) &&
+  (irL._side === 'left' && imgXs.some((x) => x > txtLt)) ? 1 : 0;
+
 // 3) fontString menghormati size/bold/italic/underline/name
 const f = { size: 22, bold: true, italic: true, underline: true, name: 'serif' };
 m.font_string_ok = /22px/.test(fontString({ font: f })) && /italic/.test(fontString({ font: f })) &&

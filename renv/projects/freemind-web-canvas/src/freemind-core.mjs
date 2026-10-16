@@ -595,11 +595,12 @@ function drawNode(ctx, node, opts, root) {
     ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x + w, y + h); ctx.stroke();
   }
 
-  // Teks + ikon dalam satu baris; ikon di sisi menjauh dari root
-  // (NodeView.updateIconPosition: LEADING utk kiri, TRAILING utk kanan).
+  // Teks + ikon dalam satu baris; ikon di sisi MENGHADAP root
+  // (NodeView.updateIconPosition: isLeft ? LEADING : TRAILING → kanan: ikon di kiri,
+  //  kiri: ikon di kanan).
   const keys = iconKeys(node);
   const iconW = keys.length * ICON_SIZE;
-  const textX = node._side === 'left' ? x + iconW + (w - iconW) / 2 : x + (w - iconW) / 2;
+  const textX = node._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
   ctx.fillStyle = node.color || '#101010';
   ctx.fillText(node.text, textX, y + h / 2);
   if (node.font?.underline) {
@@ -610,7 +611,7 @@ function drawNode(ctx, node, opts, root) {
     ctx.beginPath(); ctx.moveTo(textX - tw / 2, uy); ctx.lineTo(textX + tw / 2, uy); ctx.stroke();
   }
   if (opts.images && iconW) {
-    let cx = node._side === 'left' ? x : x + w - iconW;
+    let cx = node._side === 'left' ? x + w - iconW : x;
     const iy = y + (h - ICON_SIZE) / 2;
     for (const k of keys) {
       const img = opts.images.get(k);
@@ -926,9 +927,9 @@ export function renderSVG(root, opts = {}) {
     const fz = n.font?.size ? ` font-size="${n.font.size}"` : '';
     const keys = iconKeys(n);
     const iconW = keys.length * ICON_SIZE;
-    const textX = n._side === 'left' ? x + iconW + (w - iconW) / 2 : x + (w - iconW) / 2;
+    const textX = n._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
     out.push(`<text x="${textX}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(n.text)}</text>`);
-    let cx = n._side === 'left' ? x : x + w - iconW;
+    let cx = n._side === 'left' ? x + w - iconW : x;
     for (const k of keys) {
       out.push(`<image href="icons/${k}.png" x="${cx}" y="${y + (h - ICON_SIZE) / 2}" width="${ICON_SIZE}" height="${ICON_SIZE}"/>`);
       cx += ICON_SIZE;
