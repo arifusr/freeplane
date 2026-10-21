@@ -173,7 +173,7 @@ function buildNode(el) {
 // Emitter .mm (tulis atribut non-default, urutan ala NodeAdapter.save)
 // ---------------------------------------------------------------------------
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\r\n?|\n/g, '&#10;');
 
 export function serializeMM(root, { version = '1.1.0' } = {}) {
   return '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -252,10 +252,22 @@ function splitChildren(node, isRoot) {
 // Layout: satu lintasan bottom-up, bbox lokal, lalu penempatan global.
 // measure(node) -> {w,h} ukuran konten node.
 // ---------------------------------------------------------------------------
-let measureFn = (node) => ({ w: Math.max(20, node.text.length * 7 + 12), h: 16 + 4 });
+let measureFn = (node) => {
+  const lines = textLines(node);
+  const w = Math.max(...lines.map((l) => l.length), 0) * 7 + 12;
+  return { w: Math.max(20, w), h: Math.max(20, lines.length * lineHeight(node) + 6) };
+};
 export function setMeasure(fn) { measureFn = fn; }
 
+// Teks node dapat multi-baris; setiap '\n' menjadi baris baru (NodeAdapter).
+export function textLines(node) { return String(node.text ?? '').split(/\r?\n/); }
+export function lineHeight(node) {
+  const f = node.font || {};
+  return Math.max(14, (f.size || 14) * 1.2);
+}
+
 export function layout(root) {
+  walk(root, () => {}, null);   // set _parent sebelum layout (dipakai style & calcShiftY)
   assignSides(root, true);
   measureBBox(root, true);
   root._contentX = 0;
@@ -508,19 +520,30 @@ function drawCloud(ctx, node) {
   ctx.restore();
 }
 
-// Gaya node mengikuti NodeAdapter.getStyle(): root pakai standardrootnodestyle,
-// node lain pakai standardnodestyle; 'as_parent' mewarisi induk; 'combined'
-// jadi bubble saat folded, fork saat terbuka.
-const STANDARD_NODE_STYLE = 'fork';
-const STANDARD_ROOT_NODE_STYLE = 'bubble';
+// Gaya node mengikuti NodeAdapter.getStyle()/NodeViewFactory:
+// - standardnodestyle = 'as_parent' (freemind.properties) → node tanpa gaya
+//   eksplisit MEWARISI gaya induknya (induk yang tak bereksplisit mewarisi lagi,
+//   hingga root). Jadi node baru (child/sibling) mengikuti gaya node asalnya.
+// - standardrootnodestyle = 'fork' (nilai getStyle root), tetapi root SELALU
+//   digambar dengan RootMainView (bentuk lonjong/bubble) → visual root 'bubble'.
+// - 'combined' = bubble saat folded, fork saat terbuka.
+const STANDARD_NODE_STYLE = 'as_parent';
+const STANDARD_ROOT_NODE_STYLE = 'fork';
 
-function resolvedStyle(node, root) {
+// Padanan NodeAdapter.getStyle(): nilai gaya untuk pewarisan (root = fork).
+function styleOf(node, root) {
   if (node === root) return STANDARD_ROOT_NODE_STYLE;
   let st = node.style;
   if (st == null) st = STANDARD_NODE_STYLE;
-  else if (st === 'as_parent') st = resolvedStyle(node._parent, root);
+  if (st === 'as_parent') st = styleOf(node._parent, root);
   if (st === 'combined') st = node.folded ? 'bubble' : 'fork';
   return st === 'bubble' ? 'bubble' : 'fork';
+}
+
+// Gaya visual (main view): root selalu RootMainView (bubble), lain dari getStyle().
+export function resolvedStyle(node, root) {
+  if (node === root) return 'bubble';
+  return styleOf(node, root);
 }
 
 // NodeAdapter font: NAME/SIZE/BOLD/ITALIC/UNDERLINE.
@@ -601,14 +624,20 @@ function drawNode(ctx, node, opts, root) {
   const keys = iconKeys(node);
   const iconW = keys.length * ICON_SIZE;
   const textX = node._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
+  const lines = textLines(node);
+  const lineH = lineHeight(node);
+  let ly = y + (h - lines.length * lineH) / 2 + lineH / 2;
   ctx.fillStyle = node.color || '#101010';
-  ctx.fillText(node.text, textX, y + h / 2);
-  if (node.font?.underline) {
-    const tw = ctx.measureText(node.text).width;
-    const uy = y + h / 2 + (node.font.size || 14) * 0.55;
-    ctx.strokeStyle = node.color || '#101010';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(textX - tw / 2, uy); ctx.lineTo(textX + tw / 2, uy); ctx.stroke();
+  for (const line of lines) {
+    ctx.fillText(line, textX, ly);
+    if (node.font?.underline) {
+      const tw = ctx.measureText(line).width;
+      const uy = ly + (node.font.size || 14) * 0.55;
+      ctx.strokeStyle = node.color || '#101010';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(textX - tw / 2, uy); ctx.lineTo(textX + tw / 2, uy); ctx.stroke();
+    }
+    ly += lineH;
   }
   if (opts.images && iconW) {
     let cx = node._side === 'left' ? x + w - iconW : x;
@@ -928,7 +957,12 @@ export function renderSVG(root, opts = {}) {
     const keys = iconKeys(n);
     const iconW = keys.length * ICON_SIZE;
     const textX = n._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
-    out.push(`<text x="${textX}" y="${y + h / 2}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(n.text)}</text>`);
+    const lines = textLines(n);
+    const lineH = lineHeight(n);
+    const y0 = y + (h - lines.length * lineH) / 2 + lineH / 2;
+    lines.forEach((line, i) => {
+      out.push(`<text x="${textX}" y="${y0 + i * lineH}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(line)}</text>`);
+    });
     let cx = n._side === 'left' ? x + w - iconW : x;
     for (const k of keys) {
       out.push(`<image href="icons/${k}.png" x="${cx}" y="${y + (h - ICON_SIZE) / 2}" width="${ICON_SIZE}" height="${ICON_SIZE}"/>`);

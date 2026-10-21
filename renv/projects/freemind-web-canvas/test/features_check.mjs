@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createNode, layout, serializeMM, parseMM, renderSVG,
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
-  ICON_SIZE,
+  resolvedStyle, ICON_SIZE,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -127,6 +127,34 @@ ac._baseH = 22; ac._attrRows = 1; ac._attrsVisible = ac.attrs; ac._attrColW = 40
 ar2.children = [ac]; layout(ar2);
 m.attr_svg_block_ok = renderSVG(ar2).includes('>v<') ? 1 : 0;
 m.note_roundtrip_ok = parseMM(serializeMM(function () { const z = createNode('n'); z.note = 'catatan'; return z; }())).note === 'catatan' ? 1 : 0;
+
+// 11) gaya node: default 'as_parent' (freemind.properties) → node baru mengikuti gaya
+//     node asalnya; root selalu digambar sebagai bubble (RootMainView).
+const sr = createNode('root');
+const sc = createNode('anak'); sc.style = 'bubble';
+const sg = createNode('cucu');
+const sf = createNode('keponakan');
+sc.children = [sg];
+sr.children = [sc, sf];
+layout(sr);
+m.style_root_visual_ok = resolvedStyle(sr, sr) === 'bubble' ? 1 : 0;         // root = RootMainView
+m.style_default_fork_ok = resolvedStyle(sf, sr) === 'fork' ? 1 : 0;          // anak root default = fork
+m.style_inherit_child_ok = resolvedStyle(sg, sr) === 'bubble' ? 1 : 0;       // cucu ikut induk (bubble)
+sc.style = 'fork'; layout(sr);
+m.style_follow_parent_change_ok = resolvedStyle(sg, sr) === 'fork' ? 1 : 0;  // ikut saat induk berubah
+const sroot = createNode('root2'); const smid = createNode('mid'); smid.style = 'bubble';
+const sleaf = createNode('leaf'); smid.children = [sleaf]; sroot.children = [smid]; layout(sroot);
+m.style_explicit_parent_ok = resolvedStyle(sleaf, sroot) === 'bubble' ? 1 : 0;
+
+// 12) teks multi-baris: newline disimpan sebagai &#10; dan dirender per baris.
+const ml = createNode('baris satu\nbaris dua');
+const mlOut = serializeMM(ml);
+m.multiline_entity_ok = mlOut.includes('&#10;') ? 1 : 0;
+m.multiline_roundtrip_ok = parseMM(mlOut).text === 'baris satu\nbaris dua' ? 1 : 0;
+const mroot = createNode('r');
+const mnode = createNode('dua\nbaris'); mroot.children = [mnode]; layout(mroot);
+m.multiline_svg_ok = (renderSVG(mroot).match(/<text /g) || []).length >= 3 ? 1 : 0;
+m.multiline_height_ok = (mnode._baseH || mnode._h) > (mroot._baseH || mroot._h) ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });
