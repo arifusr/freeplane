@@ -74,6 +74,9 @@
   #nodeedit { position: fixed; display: none; z-index: 40; box-sizing: border-box; margin: 0; padding: 0 4px;
               border: 1px solid #316ac5; border-radius: 2px; outline: 2px solid rgba(49,106,197,.22);
               background: #fff; color: #101010; text-align: center; resize: none; overflow: hidden; }
+  #arrowedit { position: fixed; display: none; z-index: 41; box-sizing: border-box; margin: 0; padding: 0 4px;
+               border: 1px solid #316ac5; border-radius: 2px; outline: 2px solid rgba(49,106,197,.22);
+               background: #fff; color: #333333; text-align: center; font: 12px system-ui, sans-serif; }
 </style>
 </head>
 <body>
@@ -128,9 +131,10 @@
 </div>
 <div id="tabbar"></div>
 <div id="panel" class="hidden"></div>
-<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · di editor: Enter selesai, Shift+Enter baris baru · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
+<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · tombol panah = pindah seleksi · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Insert → Ringkasan Baru = ringkas saudara terpilih · Insert → Panah ke Node Terpilih = hubungkan node (yang pertama jadi sumber) · di editor: Enter selesai, Shift+Enter baris baru · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
 <canvas id="cv"></canvas>
 <textarea id="nodeedit" rows="1" autocomplete="off" spellcheck="false"></textarea>
+<input id="arrowedit" type="text" autocomplete="off" spellcheck="false">
 
 <script id="seed" type="application/xml">
 <map version="1.1.0">
@@ -150,7 +154,7 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
+import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
   from './freemind-core.mjs';
 import { BUILTIN_ICONS } from './icons-builtin.mjs';
 
@@ -179,6 +183,7 @@ let selected = null;
 let selection = new Set();
 let view = { x: 0, y: 0, scale: 1 };
 let editing = null;   // { node, original, isNew } saat editor teks node aktif
+let arrowEditing = null; // { node, link, original } saat edit label tengah panah
 let undoStack = [];
 let redoStack = [];
 
@@ -189,7 +194,7 @@ function stashActive() {
 }
 function adoptActive() {
   const d = tabs[activeTab]; if (!d) return;
-  root = d.root; selected = d.selected; selection = d.selection;
+  root = d.root; selected = d.selected; selection = d.selection; selectedArrow = null;
   view = d.view; undoStack = d.undoStack; redoStack = d.redoStack;
 }
 function loadState() {
@@ -301,6 +306,8 @@ function nextTab(d) { switchTab((activeTab + d + tabs.length) % tabs.length); }
 let drag = null;       // pan
 let nodeDrag = null;   // pindah node (DnD reparent/reorder)
 let moveDrag = null;   // node motion (HGAP/VSHIFT) via pegangan oval
+let arrowDrag = null;  // menekuk panah dengan menyeret garisnya
+let selectedArrow = null; // { node, link } panah terpilih
 let hoverHandle = null;
 let band = null;       // seleksi kotak (rubber-band)
 let clipboard = null;  // subtree tersalin
@@ -322,12 +329,12 @@ function ensureIcons(nodes) {
 }
 
 const makeNode = (position = null) => ({ text: '', folded: false, position, style: null, color: null,
-  bg: null, edge: null, font: null, icons: [], rich: null, note: null, cloud: null, arrowlinks: [],
-  attrs: [], children: [], hGap: 20, vGap: 3, shiftY: 0 });
+  bg: null, textAlign: null, edge: null, font: null, icons: [], rich: null, note: null, cloud: null, arrowlinks: [],
+  attrs: [], children: [], summary: false, firstGroup: false, hGap: 20, vGap: 3, shiftY: 0 });
 
 function commit() { undoStack.push(serializeMM(root)); if (undoStack.length > 200) undoStack.shift(); redoStack.length = 0; }
-function undo() { if (!undoStack.length) return; redoStack.push(serializeMM(root)); root = parseMM(undoStack.pop()); selected = null; selection = new Set(); relayout(); }
-function redo() { if (!redoStack.length) return; undoStack.push(serializeMM(root)); root = parseMM(redoStack.pop()); selected = null; selection = new Set(); relayout(); }
+function undo() { if (!undoStack.length) return; redoStack.push(serializeMM(root)); root = parseMM(undoStack.pop()); selected = null; selection = new Set(); selectedArrow = null; relayout(); }
+function redo() { if (!redoStack.length) return; undoStack.push(serializeMM(root)); root = parseMM(redoStack.pop()); selected = null; selection = new Set(); selectedArrow = null; relayout(); }
 
 function cssSize() {
   const r = cv.getBoundingClientRect();
@@ -383,7 +390,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.translate(view.x, view.y);
   ctx.scale(view.scale, view.scale);
-  if (root) { ensureIcons(visibleNodes(root)); render(ctx, root, { selectedNode: selected, selection, images }); }
+  if (root) { ensureIcons(visibleNodes(root)); render(ctx, root, { selectedNode: selected, selection, images, selectedArrow }); }
   if (nodeDrag && nodeDrag.moved && nodeDrag.node) {
     const n = nodeDrag.node;
     const cx = n._contentX + n._w / 2, cy = n._contentY + n._h / 2;
@@ -422,6 +429,7 @@ function draw() {
   const handleNode = (moveDrag && moveDrag.node) || hoverHandle;
   if (handleNode) drawHandle(ctx, handleNode);
   if (editing) placeEditor();
+  if (arrowEditing) placeArrowEditor();
 }
 
 // Petakan titik pointer (CSS px) -> koordinat dunia, dengan membalik persis
@@ -445,6 +453,7 @@ const isDescendant = (anc, n) => { let p = n._parent; while (p) { if (p === anc)
 // Pengganti prompt(): kotak input diposisikan tepat di atas node, sehingga node
 // baru langsung bisa diketik (Enter = selesai, Shift+Enter = baris baru, Escape = batal).
 const editor = document.getElementById('nodeedit');
+const arrowEditor = document.getElementById('arrowedit');
 
 function editorBox(n) {
   const r = cv.getBoundingClientRect();
@@ -478,10 +487,12 @@ function placeEditor() {
   editor.style.fontWeight = f.bold ? 'bold' : 'normal';
   editor.style.fontStyle = f.italic ? 'italic' : 'normal';
   editor.style.textDecoration = f.underline ? 'underline' : 'none';
+  editor.style.textAlign = /^(left|right)$/i.test(n.textAlign || '') ? n.textAlign.toLowerCase() : 'center';
 }
 function startEdit(node, opts = {}) {
   if (!node) return;
   if (editing) finishEdit();
+  if (arrowEditing) finishArrowEdit();
   selected = node; selection = new Set([node]);
   layout(root);
   // Bila node berada di luar viewport, geser view agar editor terlihat.
@@ -513,6 +524,63 @@ function finishEdit(cancel = false) {
   }
   relayout();
 }
+// Label tengah panah: edit inline di titik tengah kurva (dobel-klik panah).
+function placeArrowEditor() {
+  if (!arrowEditing) return;
+  const target = allNodes().find((x) => x.id === arrowEditing.link.destination);
+  if (!target) { finishArrowEdit(true); return; }
+  const mid = arrowMidpoint(arrowEditing.node, target, arrowEditing.link);
+  const r = cv.getBoundingClientRect();
+  const fs = Math.max(10, 12 * view.scale);
+  const text = arrowEditor.value || '';
+  const w = Math.max(70, (text.length + 2) * fs * 0.62 + 12);
+  const h = Math.max(20, fs * 1.5);
+  const x = r.left + view.x + mid.x * view.scale;
+  const y = r.top + view.y + mid.y * view.scale;
+  arrowEditor.style.left = (x - w / 2) + 'px';
+  arrowEditor.style.top = (y - h / 2) + 'px';
+  arrowEditor.style.width = w + 'px';
+  arrowEditor.style.height = h + 'px';
+  arrowEditor.style.fontSize = fs + 'px';
+}
+function startArrowEdit(node, link) {
+  if (!node || !link) return;
+  if (editing) finishEdit();
+  if (arrowEditing) finishArrowEdit();
+  selectedArrow = { node, link };
+  selected = null;
+  selection = new Set();
+  arrowEditing = { node, link, original: link.middleLabel || '' };
+  arrowEditor.value = arrowEditing.original;
+  arrowEditor.style.display = 'block';
+  placeArrowEditor();
+  arrowEditor.focus();
+  arrowEditor.select();
+  draw();
+  renderPanel();
+}
+function finishArrowEdit(cancel = false) {
+  if (!arrowEditing) return;
+  const { node, link, original } = arrowEditing;
+  const v = arrowEditor.value.trim();
+  arrowEditing = null;
+  arrowEditor.style.display = 'none';
+  arrowEditor.value = '';
+  if (!cancel && v !== original && node.arrowlinks.includes(link)) {
+    commit();
+    link.middleLabel = v || null;
+  }
+  relayout();
+}
+arrowEditor.addEventListener('blur', () => { if (arrowEditing) finishArrowEdit(); });
+arrowEditor.addEventListener('input', placeArrowEditor);
+arrowEditor.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); finishArrowEdit(); }
+  else if (e.key === 'Escape') { e.preventDefault(); finishArrowEdit(true); }
+  else if ((e.ctrlKey || e.metaKey) && ['s', 'o', 'p', 'f'].includes(e.key.toLowerCase())) e.preventDefault();
+});
+
 editor.addEventListener('blur', () => { if (editing) finishEdit(); });
 editor.addEventListener('input', placeEditor);
 editor.addEventListener('keydown', (e) => {
@@ -530,11 +598,12 @@ editor.addEventListener('keydown', (e) => {
 // di atas link = 'pointer' (tangan); di atas node = 'pointer'; latar = 'grab'.
 function setCursor(w) {
   let c;
-  if (moveDrag) c = 'move';
+  if (moveDrag || arrowDrag) c = 'move';
   else if (nodeDrag && nodeDrag.moved) c = 'grabbing';
   else if (drag || band) c = 'grabbing';
   else if (hoverHandle) c = 'move';
   else if (w && hitHandle(root, w.x, w.y)) c = 'move';
+  else if (w && hitArrow(root, w.x, w.y, 7 / view.scale)) c = 'move';
   else if (w && (hitLink(root, w.x, w.y) || hitFold(root, w.x, w.y))) c = 'pointer';
   else if (w && hitTest(root, w.x, w.y)) c = 'pointer';
   else c = 'grab';
@@ -591,9 +660,12 @@ cv.addEventListener('pointerdown', (e) => {
     return;
   }
   const foldNode = hitFold(root, w.x, w.y);
+  const arrowHit = hitArrow(root, w.x, w.y, 7 / view.scale);
   if (foldNode) {
+    selectedArrow = null;
     commit(); foldNode.folded = !foldNode.folded; selected = foldNode; selection = new Set([foldNode]); relayout();
   } else if (handle) {
+    selectedArrow = null;
     moveDrag = {
       node: handle, start: { x: w.x, y: w.y }, committed: false, ctrl,
       orig: {
@@ -606,7 +678,28 @@ cv.addEventListener('pointerdown', (e) => {
     setCursor(w);
     draw();
     renderPanel();
+  } else if (arrowHit) {
+    selectedArrow = { node: arrowHit.node, link: arrowHit.link };
+    selected = null; selection = new Set();
+    const g = arrowCurve(arrowHit.node, arrowHit.target, arrowHit.link);
+    const dS = (w.x - g.s.x) ** 2 + (w.y - g.s.y) ** 2;
+    const dT = (w.x - g.e.x) ** 2 + (w.y - g.e.y) ** 2;
+    arrowDrag = {
+      node: arrowHit.node, link: arrowHit.link, target: arrowHit.target,
+      origin: { x: w.x, y: w.y }, committed: false,
+      init: {
+        s: arrowHit.link.startInclination ? { ...arrowHit.link.startInclination } : { x: Math.round(g.reach), y: 0 },
+        e: arrowHit.link.endInclination ? { ...arrowHit.link.endInclination } : { x: Math.round(g.reach), y: 0 },
+      },
+      // Freeplane: ujung yang lebih dekat ikut ditekuk; tengah = keduanya.
+      bendStart: dS <= dT * 2.25,
+      bendEnd: dT <= dS * 2.25,
+    };
+    setCursor(w);
+    draw();
+    renderPanel();
   } else if (hit) {
+    selectedArrow = null;
     if (e.shiftKey) {
       if (selection.has(hit)) selection.delete(hit); else selection.add(hit);
       selected = hit;
@@ -622,9 +715,11 @@ cv.addEventListener('pointerdown', (e) => {
       renderPanel();
     }
   } else if (e.shiftKey) {
+    selectedArrow = null;
     band = { x0: w.x, y0: w.y, x1: w.x, y1: w.y };
     draw();
   } else {
+    selectedArrow = null;
     selected = null; selection = new Set();
     drag = { x: e.clientX - view.x, y: e.clientY - view.y };
     draw();
@@ -655,6 +750,28 @@ cv.addEventListener('pointermove', (e) => {
     return;
   }
   if (band) { const w = toWorld(e); band.x1 = w.x; band.y1 = w.y; draw(); return; }
+  if (arrowDrag) {
+    const w = toWorld(e);
+    const dx = w.x - arrowDrag.origin.x;
+    const dy = w.y - arrowDrag.origin.y;
+    if ((Math.abs(dx) + Math.abs(dy)) > 0) {
+      if (!arrowDrag.committed) {
+        commit();
+        arrowDrag.committed = true;
+        const link = arrowDrag.link;
+        if (!link.startInclination) link.startInclination = { ...arrowDrag.init.s };
+        if (!link.endInclination) link.endInclination = { ...arrowDrag.init.e };
+      }
+      const link = arrowDrag.link;
+      if (arrowDrag.bendStart) adjustInclination(link.startInclination, dx, dy, arrowDrag.node._side === 'left');
+      if (arrowDrag.bendEnd) adjustInclination(link.endInclination, dx, dy, arrowDrag.target._side === 'left');
+      arrowDrag.origin = { x: w.x, y: w.y };
+    }
+    draw();
+    renderPanel();
+    setCursor();
+    return;
+  }
   if (moveDrag) {
     const w = toWorld(e);
     const dx = w.x - moveDrag.start.x;
@@ -737,6 +854,7 @@ function endPointer(e) {
     band = null;
   }
   if (moveDrag) { moveDrag = null; relayout(); }
+  if (arrowDrag) { arrowDrag = null; relayout(); }
   drag = null;
   setCursor();
   draw();
@@ -762,10 +880,12 @@ cv.addEventListener('dblclick', (e) => {
     // MindMapNodeMotionListener.mouseClicked: reset posisi (atau Ctrl: reset VGap).
     commit();
     if (e.ctrlKey || e.metaKey) { if (h._parent) h._parent.vGap = VGAP; }
-    else { h.hGap = HGAP; h.shiftY = 0; }
+    else { h.hGap = h.summary ? SUMMARY_HGAP : HGAP; h.shiftY = 0; }
     relayout();
     return;
   }
+  const arrowHit = hitArrow(root, w.x, w.y, 8 / view.scale);
+  if (arrowHit) { startArrowEdit(arrowHit.node, arrowHit.link); return; }
   const hit = hitTest(root, w.x, w.y);
   if (hit) startEdit(hit);
 });
@@ -791,11 +911,130 @@ function addSibling() {
   relayout();
   startEdit(n, { isNew: true });
 }
+function addSummary() {
+  const base = selection.size ? [...selection] : (selected ? [selected] : []);
+  const sel = base.filter((n) => n && n._parent);
+  if (!sel.length) { alert('Pilih satu atau beberapa saudara yang akan diringkas.'); return; }
+  const parent = sel[0]._parent;
+  const side = sel[0]._side;
+  if (sel.some((n) => n._parent !== parent)) { alert('Ringkasan hanya untuk node dengan induk yang sama.'); return; }
+  if (sel.some((n) => n._side !== side)) { alert('Pilih node pada sisi kiri atau kanan yang sama.'); return; }
+  const idx = sel.map((n) => parent.children.indexOf(n));
+  const start = Math.min(...idx), end = Math.max(...idx);
+  if (parent.children.slice(start, end + 1).some((n) => n.summary)) {
+    alert('Ringkasan bersarang belum didukung.'); return;
+  }
+  commit();
+  parent.children[start].firstGroup = true;   // batas grup (hook FirstGroupNode)
+  const ref = parent.children[end];
+  const n = makeNode(ref.position || null);
+  n.style = ref.style || null;                // ikuti gaya node yang diringkas
+  n.summary = true;
+  n.hGap = SUMMARY_HGAP;                      // jarak awal dari grup (bisa digeser)
+  parent.children.splice(end + 1, 0, n);
+  selected = n; selection = new Set([n]);
+  relayout();
+  startEdit(n, { isNew: true });
+}
+// Panah/connector antar-node (Freeplane ArrowLink): banyak node dapat
+// dihubungkan dari satu sumber. ID dibuat otomatis bila belum ada.
+function allNodes() {
+  const out = [];
+  (function rec(n) { out.push(n); for (const c of n.children) rec(c); })(root);
+  return out;
+}
+function freshId(used) {
+  let id, i = 0;
+  do { id = 'ID_' + Date.now().toString(36) + '_' + (i++); } while (used.has(id));
+  used.add(id);
+  return id;
+}
+function ensureNodeId(n, used) {
+  if (n.id && !used.has(n.id)) { used.add(n.id); return n.id; }
+  n.id = freshId(used);
+  return n.id;
+}
+// Salinan/duplikat mendapat ID baru; panah internal diarahkan ke ID baru.
+function remapCloneIds(n) {
+  const used = new Set(allNodes().map((x) => x.id).filter(Boolean));
+  const map = new Map();
+  (function rec(x) {
+    if (x.id) { const old = x.id; x.id = freshId(used); map.set(old, x.id); }
+    for (const c of x.children) rec(c);
+  })(n);
+  (function rec(x) {
+    for (const a of x.arrowlinks) if (a.destination && map.has(a.destination)) a.destination = map.get(a.destination);
+    for (const c of x.children) rec(c);
+  })(n);
+}
+function subtreeIds(n, out = []) {
+  if (n.id) out.push(n.id);
+  for (const c of n.children) subtreeIds(c, out);
+  return out;
+}
+function addArrows(source, targetList) {
+  if (!source || !targetList || !targetList.length) return 0;
+  const targets = targetList.filter((t) => t && t !== source &&
+    !(t.id && source.arrowlinks.some((a) => a.destination === t.id)));
+  if (!targets.length) { alert('Panah ke node tersebut sudah ada.'); return 0; }
+  const used = new Set(allNodes().map((n) => n.id).filter(Boolean));
+  commit();
+  ensureNodeId(source, used);
+  for (const t of targets) {
+    const dest = ensureNodeId(t, used);
+    source.arrowlinks.push({ destination: dest, color: null,
+      startArrow: 'None', endArrow: 'Default', startInclination: null, endInclination: null,
+      sourceLabel: null, middleLabel: null, targetLabel: null });
+  }
+  relayout();
+  return targets.length;
+}
+function connect() {
+  const chosen = selection.size ? [...selection] : (selected ? [selected] : []);
+  if (chosen.length < 2) { alert('Pilih minimal dua node; node pertama menjadi sumber panah.'); return; }
+  addArrows(chosen[0], chosen.slice(1));
+}
+function removeArrows() {
+  const chosen = selection.size ? [...selection] : (selected ? [selected] : []);
+  if (!chosen.length) return;
+  const nodes = allNodes();
+  const ids = new Set(chosen.map((n) => n.id).filter(Boolean));
+  const touched = new Set(chosen);
+  const has = nodes.some((n) => (touched.has(n) && n.arrowlinks.length)
+    || (ids.size && n.arrowlinks.some((a) => ids.has(a.destination))));
+  if (!has) { alert('Tidak ada panah pada node terpilih.'); return; }
+  commit();
+  for (const n of nodes) {
+    if (touched.has(n)) n.arrowlinks = [];
+    if (ids.size && n.arrowlinks.length) n.arrowlinks = n.arrowlinks.filter((a) => !ids.has(a.destination));
+  }
+  relayout();
+}
+function deleteSelectedArrow() {
+  if (!selectedArrow) return;
+  const { node, link } = selectedArrow;
+  const i = node && node.arrowlinks ? node.arrowlinks.indexOf(link) : -1;
+  if (i < 0) { selectedArrow = null; relayout(); return; }
+  commit();
+  node.arrowlinks.splice(i, 1);
+  selectedArrow = null;
+  relayout();
+}
 function remove() {
   const targets = (selection.size ? [...selection] : (selected ? [selected] : [])).filter((n) => n._parent);
   if (!targets.length) return;
   commit();
-  for (const n of targets) { const p = n._parent; p.children.splice(p.children.indexOf(n), 1); }
+  const dead = new Set();
+  for (const n of targets) {
+    for (const id of subtreeIds(n)) dead.add(id);
+    const p = n._parent;
+    p.children.splice(p.children.indexOf(n), 1);
+  }
+  if (dead.size) {
+    for (const n of allNodes()) {
+      if (n.arrowlinks.length) n.arrowlinks = n.arrowlinks.filter((a) => !dead.has(a.destination));
+    }
+  }
   selected = targets[0]._parent;
   selection = new Set(selected ? [selected] : []);
   relayout();
@@ -809,6 +1048,7 @@ function pasteNode() {
   if (!clipboard || !selected) return;
   commit();
   const n = cloneSubtree(clipboard);
+  remapCloneIds(n);
   selected.children.push(n);
   selected.folded = false;
   selected = n; selection = new Set([n]);
@@ -818,6 +1058,7 @@ function duplicateNode() {
   if (!selected) return;
   commit();
   const n = cloneSubtree(selected);
+  remapCloneIds(n);
   if (selected._parent) {
     const p = selected._parent;
     p.children.splice(p.children.indexOf(selected) + 1, 0, n);
@@ -830,6 +1071,34 @@ function centerOn(n) {
   const { w: cw, h: ch } = cssSize();
   view.x = cw / 2 - (n._contentX + n._w / 2) * view.scale;
   view.y = ch / 2 - (n._contentY + n._h / 2) * view.scale;
+}
+
+// Geser view seperlunya agar node terpilih tetap terlihat (navigasi panah).
+function ensureVisible(n) {
+  const { w: cw, h: ch } = cssSize();
+  const pad = 36;
+  const x0 = view.x + n._contentX * view.scale;
+  const y0 = view.y + n._contentY * view.scale;
+  const x1 = x0 + n._w * view.scale;
+  const y1 = y0 + (n._h || 0) * view.scale;
+  if (x0 < pad) view.x += pad - x0;
+  else if (x1 > cw - pad) view.x -= x1 - (cw - pad);
+  if (y0 < pad) view.y += pad - y0;
+  else if (y1 > ch - pad) view.y -= y1 - (ch - pad);
+}
+
+// Tombol panah = pindah highlight ke node terdekat pada arah tersebut.
+function moveSelectionDir(kx, ky) {
+  const from = selected || (selectedArrow && selectedArrow.node) || root;
+  if (!from) return;
+  const next = findNeighbor(root, from, kx, ky);
+  if (!next) return;
+  selectedArrow = null;
+  selected = next;
+  selection = new Set([next]);
+  ensureVisible(next);
+  draw();
+  renderPanel();
 }
 function findNext(dir = 1) {
   if (!search.q) { startSearch(); return; }
@@ -921,6 +1190,9 @@ const MENUS = {
   insert: [
     { t: 'Anak Baru', a: 'Tab', c: 'child' },
     { t: 'Saudara Baru', a: 'Enter', c: 'sibling' },
+    { t: 'Ringkasan Baru', c: 'summary' },
+    { t: 'Panah ke Node Terpilih', c: 'connect' },
+    { t: 'Hapus Panah Node', c: 'disconnect' },
     { sep: 1 },
     { t: 'Catatan…', c: 'note' },
     { t: 'Ikon', c: 'icons' },
@@ -976,7 +1248,7 @@ const CMDS = {
   clearlocal: () => { if (confirm('Hapus simpanan peta di peramban?')) { clearLocal(); const el = document.getElementById('saveinfo'); if (el) el.textContent = 'Simpanan dihapus'; } },
   undo, redo, cut: cutNode, copy: copyNode, paste: pasteNode, dup: duplicateNode, del: remove,
   selectall: selectAll, selectbranch: selectBranch,
-  child: addChild, sibling: addSibling,
+  child: addChild, sibling: addSibling, summary: addSummary, connect, disconnect: removeArrows,
   note: () => focusPanel('#p-note'),
   icons: () => { if (!selected) return; renderPanel(); const l = panel.querySelector('#p-iconlist'); if (l) l.style.display = 'flex'; },
   attr: () => { if (selected) mutate(() => selected.attrs.push({ name: 'nama', value: 'nilai' })); },
@@ -1024,8 +1296,9 @@ function buildMenu() {
 buildMenu();
 
 window.addEventListener('keydown', (e) => {
-  if (editing) return;   // editor node menangani input sendiri
-  if (e.key === 'Escape') { closeMenus(); return; }
+  if (editing || arrowEditing) return;   // editor node/label panah menangani input sendiri
+  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || '')) return;
+  if (e.key === 'Escape') { closeMenus(); if (selectedArrow) { selectedArrow = null; draw(); renderPanel(); } return; }
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if (ctrl && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
@@ -1049,8 +1322,13 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'F2') { e.preventDefault(); if (selected) startEdit(selected); }
   else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
   else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
+  else if (e.key === 'Delete' && selectedArrow) { e.preventDefault(); deleteSelectedArrow(); }
   else if (e.key === 'Delete') remove();
   else if (e.key === ' ') { e.preventDefault(); fold(); }
+  else if (!ctrl && !e.altKey && e.key === 'ArrowRight') { e.preventDefault(); moveSelectionDir(1, 0); }
+  else if (!ctrl && !e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); moveSelectionDir(-1, 0); }
+  else if (!ctrl && !e.altKey && e.key === 'ArrowUp') { e.preventDefault(); moveSelectionDir(0, -1); }
+  else if (!ctrl && !e.altKey && e.key === 'ArrowDown') { e.preventDefault(); moveSelectionDir(0, 1); }
 });
 
 document.getElementById('child').onclick = addChild;
@@ -1095,17 +1373,93 @@ document.getElementById('file').onchange = async (e) => {
 const panel = document.getElementById('panel');
 const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 const hex6 = (c, d) => (/^#[0-9a-fA-F]{6}$/.test(c || '') ? c : d);
+function arrowOptsHtml(cur) {
+  const v = cur || 'None';
+  const list = ['None', 'Default'];
+  if (!list.includes(v)) list.push(v);
+  return list.map((x) => `<option value="${esc(x)}"${x === v ? ' selected' : ''}>${x === 'None' ? 'tanpa' : (x === 'Default' ? 'panah' : esc(x))}</option>`).join('');
+}
 function mutate(fn) { commit(); fn(); relayout(); }
 
 const EDGE_STYLES = [['', '(default)'], ['linear', 'linear'], ['bezier', 'bezier'], ['sharp_linear', 'sharp_linear'], ['sharp_bezier', 'sharp_bezier']];
 const NODE_STYLES = [['', '(default)'], ['fork', 'fork'], ['bubble', 'bubble'], ['combined', 'combined'], ['as_parent', 'as_parent']];
+const TEXT_ALIGNS = [['', '(default)'], ['LEFT', 'kiri'], ['CENTER', 'tengah'], ['RIGHT', 'kanan']];
 const FONT_NAMES = [['', '(default)'], ['sans-serif', 'sans-serif'], ['serif', 'serif'], ['monospace', 'monospace']];
 
+function adjustInclination(inc, dx, dy, left) {
+  if (left) dx = -dx;
+  inc.x += dx; inc.y += dy;
+  if (inc.x !== 0 && Math.abs(inc.y / inc.x) < 0.015) inc.y = 0;
+  const k = Math.hypot(inc.x, inc.y);
+  if (k < 10) {
+    if (k > 0) { inc.x = inc.x * 10 / k; inc.y = inc.y * 10 / k; }
+    else inc.x = 10;
+  }
+  inc.x = Math.round(inc.x);
+  inc.y = Math.round(inc.y);
+}
+
+function renderArrowPanel() {
+  const sel = selectedArrow;
+  if (!sel || !sel.node || !sel.node.arrowlinks) { selectedArrow = null; panel.classList.add('hidden'); return; }
+  const i = sel.node.arrowlinks.indexOf(sel.link);
+  if (i < 0) { selectedArrow = null; panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const link = sel.link;
+  const target = allNodes().find((x) => x.id === link.destination) || null;
+  const sText = sel.node.text || '(tanpa teks)';
+  const tText = target ? (target.text || '(tanpa teks)') : link.destination;
+  const bend = Math.round(((link.startInclination?.y ?? 0) + (link.endInclination?.y ?? 0)) / 2);
+  panel.innerHTML = `
+    <h3>Panah</h3>
+    <div class="row"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">Dari: ${esc(sText)}</span></div>
+    <div class="row"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">Ke: ${esc(tText)}</span></div>
+    <div class="row"><label>Warna</label><input id="a-color" type="color" value="${hex6(link.color, '#0000ff')}"><button id="a-color-clear">klar</button></div>
+    <div class="row"><label>Ujung awal</label><select id="a-sa">${arrowOptsHtml(link.startArrow)}</select></div>
+    <div class="row"><label>Ujung akhir</label><select id="a-ea">${arrowOptsHtml(link.endArrow)}</select></div>
+    <h3>Teks panah</h3>
+    <div class="row"><label>Awal</label><input id="a-sl" type="text" value="${esc(link.sourceLabel || '')}" placeholder="(kosong)" style="flex:1;min-width:0"></div>
+    <div class="row"><label>Tengah</label><input id="a-ml" type="text" value="${esc(link.middleLabel || '')}" placeholder="(kosong)" style="flex:1;min-width:0"></div>
+    <div class="row"><label>Akhir</label><input id="a-tl" type="text" value="${esc(link.targetLabel || '')}" placeholder="(kosong)" style="flex:1;min-width:0"></div>
+    <div class="row"><label>Tekuk</label><input id="a-bend" type="range" min="-150" max="150" step="1" value="${bend}" style="flex:1"><span id="a-bend-v">${bend}</span></div>
+    <div class="row"><button id="a-reset">Default</button><button id="a-del">Hapus panah</button></div>
+    <div class="row" style="color:#888;font-size:11px">Klik garis panah untuk pilih; dobel-klik = edit teks tengah; seret untuk menekuk; Del hapus. Teks awal/akhir di atas.</div>`;
+  const $ = (id) => panel.querySelector(id);
+  const setBend = (v) => {
+    if (!target) return;
+    const g = arrowCurve(sel.node, target, link);
+    link.startInclination = { x: Math.round(link.startInclination?.x ?? g.reach), y: v };
+    link.endInclination = { x: Math.round(link.endInclination?.x ?? g.reach), y: v };
+  };
+  $('#a-color').onchange = (ev) => mutate(() => { link.color = ev.target.value; });
+  $('#a-color-clear').onclick = () => mutate(() => { link.color = null; });
+  $('#a-sa').onchange = (ev) => mutate(() => { link.startArrow = ev.target.value; });
+  $('#a-ea').onchange = (ev) => mutate(() => { link.endArrow = ev.target.value; });
+  $('#a-sl').onchange = (ev) => mutate(() => { link.sourceLabel = ev.target.value.trim() || null; });
+  $('#a-ml').onchange = (ev) => mutate(() => { link.middleLabel = ev.target.value.trim() || null; });
+  $('#a-tl').onchange = (ev) => mutate(() => { link.targetLabel = ev.target.value.trim() || null; });
+  $('#a-bend').oninput = (ev) => { $('#a-bend-v').textContent = ev.target.value; };
+  $('#a-bend').onchange = (ev) => { const v = +ev.target.value; mutate(() => setBend(v)); };
+  $('#a-reset').onclick = () => mutate(() => {
+    link.color = null; link.startArrow = 'None'; link.endArrow = 'Default';
+    link.startInclination = null; link.endInclination = null;
+  });
+  $('#a-del').onclick = () => deleteSelectedArrow();
+}
+
 function renderPanel() {
+  if (selectedArrow) { renderArrowPanel(); return; }
   if (!selected) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
   const n = selected;
   const e = n.edge || {}, f = n.font || {};
+  const idIndex = new Map();
+  for (const x of allNodes()) if (x.id) idIndex.set(x.id, x);
+  const arrowRows = n.arrowlinks.map((a, i) => {
+    const t = idIndex.get(a.destination);
+    const label = t ? (t.text || '(tanpa teks)') : a.destination;
+    return `<div class="row"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" title="${esc(label)}">→ ${esc(label)}</span><input type="color" data-arrowcolor="${i}" value="${hex6(a.color, '#0000ff')}" title="warna" style="width:26px;padding:0"><select data-arrowsa="${i}" title="ujung awal" style="width:58px">${arrowOptsHtml(a.startArrow)}</select><select data-arrowend="${i}" title="ujung akhir" style="width:58px">${arrowOptsHtml(a.endArrow)}</select><button data-arrowdel="${i}" title="hapus">×</button></div>`;
+  }).join('');
   const chips = n.icons.map((k, i) => `<span class="chip"><img src="icons/${k}.png" width="16" height="16">${esc(k)}<button data-rmi="${i}" title="hapus">×</button></span>`).join('');
   const iconList = BUILTIN_ICONS.map((k) => `<img src="icons/${k}.png" data-addi="${k}" title="${k}">`).join('');
   const attrRows = n.attrs.map((a, i) => `<div class="attr"><input class="n" type="text" data-attrn="${i}" value="${esc(a.name)}"><input class="v" type="text" data-attrv="${i}" value="${esc(a.value)}"><button data-attrdel="${i}" title="hapus">×</button></div>`).join('');
@@ -1115,6 +1469,9 @@ function renderPanel() {
     <h3>Catatan</h3>
     <textarea id="p-note" placeholder="(tanpa catatan)">${esc(n.note || '')}</textarea>
     <div class="row"><button id="p-note-save">Simpan catatan</button><button id="p-note-del">Hapus</button></div>
+    <h3>Panah (hubungan)</h3>
+    <div id="p-arrows">${arrowRows || '<div style="color:#999">(belum ada)</div>'}</div>
+    <div class="row"><button id="p-arrow-add">+ Panah ke node terpilih lain</button></div>
     <h3>Format</h3>
     <div class="row"><span>Ikon:</span></div>
     <div class="chips">${chips || '<span style="color:#999">(tanpa ikon)</span>'}</div>
@@ -1123,6 +1480,7 @@ function renderPanel() {
     <div class="row"><label>Warna</label><input id="p-color" type="color" value="${hex6(n.color, '#101010')}"><button id="p-color-clear">klar</button></div>
     <div class="row"><label>Latar</label><input id="p-bg" type="color" value="${hex6(n.bg, '#ffffff')}"><button id="p-bg-clear">klar</button></div>
     <div class="row"><label>Gaya</label><select id="p-style">${NODE_STYLES.map(([v, t]) => `<option value="${v}"${(n.style || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div class="row"><label>Rata</label><select id="p-align">${TEXT_ALIGNS.map(([v, t]) => `<option value="${v}"${(n.textAlign || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></div>
     <h3>Edge (ke anak)</h3>
     <div class="row"><label>Gaya</label><select id="p-edege">${EDGE_STYLES.map(([v, t]) => `<option value="${v}"${(e.style || '') === v ? ' selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="row"><label>Lebar</label><input id="p-ew" type="number" min="1" max="8" value="${e.width || 1}"><label>Warna</label><input id="p-ec" type="color" value="${hex6(e.color, '#606060')}"><button id="p-ec-clear">klar</button></div>
@@ -1137,6 +1495,15 @@ function renderPanel() {
   $('#p-text').onchange = (ev) => { const v = ev.target.value; if (v !== n.text) mutate(() => { n.text = v; }); };
   $('#p-note-save').onclick = () => { const v = $('#p-note').value; mutate(() => { n.note = v || null; }); };
   $('#p-note-del').onclick = () => mutate(() => { n.note = null; });
+  $('#p-arrow-add').onclick = () => {
+    const targets = [...selection].filter((x) => x !== n);
+    if (!targets.length) { alert('Pilih node tujuan dengan Shift+klik lebih dulu.'); return; }
+    addArrows(n, targets);
+  };
+  panel.querySelectorAll('[data-arrowdel]').forEach((b) => { b.onclick = () => { const i = +b.dataset.arrowdel; mutate(() => n.arrowlinks.splice(i, 1)); }; });
+  panel.querySelectorAll('[data-arrowcolor]').forEach((inp) => { inp.onchange = () => { const i = +inp.dataset.arrowcolor; mutate(() => { n.arrowlinks[i].color = inp.value; }); }; });
+  panel.querySelectorAll('[data-arrowsa]').forEach((sel) => { sel.onchange = () => { const i = +sel.dataset.arrowsa; mutate(() => { n.arrowlinks[i].startArrow = sel.value; }); }; });
+  panel.querySelectorAll('[data-arrowend]').forEach((sel) => { sel.onchange = () => { const i = +sel.dataset.arrowend; mutate(() => { n.arrowlinks[i].endArrow = sel.value; }); }; });
   $('#p-icon-add').onclick = () => { const l = $('#p-iconlist'); l.style.display = l.style.display === 'none' ? 'flex' : 'none'; };
   panel.querySelectorAll('[data-rmi]').forEach((b) => { b.onclick = () => { const i = +b.dataset.rmi; mutate(() => n.icons.splice(i, 1)); }; });
   panel.querySelectorAll('[data-addi]').forEach((im) => { im.onclick = () => { const k = im.dataset.addi; mutate(() => n.icons.push(k)); }; });
@@ -1145,6 +1512,7 @@ function renderPanel() {
   $('#p-bg').onchange = (ev) => mutate(() => { n.bg = ev.target.value; });
   $('#p-bg-clear').onclick = () => mutate(() => { n.bg = null; });
   $('#p-style').onchange = (ev) => mutate(() => { n.style = ev.target.value || null; });
+  $('#p-align').onchange = (ev) => mutate(() => { n.textAlign = ev.target.value || null; });
   $('#p-edege').onchange = (ev) => mutate(() => { n.edge = { ...(n.edge || {}), style: ev.target.value || 'bezier' }; });
   $('#p-ew').onchange = (ev) => mutate(() => { n.edge = { ...(n.edge || {}), width: Math.max(1, +ev.target.value || 1) }; });
   $('#p-ec').onchange = (ev) => mutate(() => { n.edge = { ...(n.edge || {}), color: ev.target.value }; });

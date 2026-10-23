@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createNode, layout, serializeMM, parseMM, renderSVG,
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
-  resolvedStyle, ICON_SIZE,
+  resolvedStyle, ICON_SIZE, summaryGroup, summaryBracket, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -155,6 +155,113 @@ const mroot = createNode('r');
 const mnode = createNode('dua\nbaris'); mroot.children = [mnode]; layout(mroot);
 m.multiline_svg_ok = (renderSVG(mroot).match(/<text /g) || []).length >= 3 ? 1 : 0;
 m.multiline_height_ok = (mnode._baseH || mnode._h) > (mroot._baseH || mroot._h) ? 1 : 0;
+
+// 13) summary node: hook SummaryNode/FirstGroupNode, grup, bracket, dan SVG.
+const sumRoot = createNode('root');
+const sumKids = ['A', 'B', 'C', 'D'].map((t) => createNode(t));
+sumKids[0].firstGroup = true;
+const sum = createNode('ringkasan');
+sum.summary = true;
+sum.hGap = SUMMARY_HGAP;
+sum.edge = { style: 'bezier', color: '#ff0000', width: 2 };
+sumRoot.children = [...sumKids, sum];
+layout(sumRoot);
+const sumXml = serializeMM(sumRoot);
+m.summary_hook_ok = sumXml.includes('NAME="SummaryNode"') && sumXml.includes('NAME="FirstGroupNode"') ? 1 : 0;
+const sumBack = parseMM(sumXml);
+layout(sumBack);
+m.summary_roundtrip_ok = sumBack.children[4].summary === true && sumBack.children[0].firstGroup === true ? 1 : 0;
+m.summary_group_ok = summaryGroup(sumBack.children[4]).map((x) => x.text).join('') === 'ABCD' ? 1 : 0;
+const bkt = summaryBracket(sumBack.children[4]);
+m.summary_bracket_ok = (bkt && bkt.top < bkt.bottom && bkt.group.length === 4) ? 1 : 0;
+const sumSvg = renderSVG(sumBack);
+m.summary_svg_ok = (sumSvg.match(/stroke="#ff0000"/g) || []).length === 2 ? 1 : 0;
+const sumNode = sumBack.children[4];
+const sumG = summaryGroup(sumNode);
+const groupOuter = Math.max(...sumG.map((x) => x._contentX + x._w));
+const groupMid = (Math.min(...sumG.map((x) => x._contentY)) + Math.max(...sumG.map((x) => x._contentY + (x._baseH || x._h)))) / 2;
+m.summary_front_ok = sumNode._contentX > groupOuter ? 1 : 0;
+m.summary_center_ok = Math.abs((sumNode._contentY + sumNode._h / 2) - groupMid) <= 1 ? 1 : 0;
+const sumX0 = sumNode._contentX, sumY0 = sumNode._contentY;
+sumNode.hGap += 20;
+sumNode.shiftY = 12;
+layout(sumBack);
+m.summary_move_ok = Math.abs(sumNode._contentX - sumX0 - 20) <= 1 && Math.abs(sumNode._contentY - sumY0 - 12) <= 1 ? 1 : 0;
+
+// 14) banyak panah (ArrowLink) dari satu sumber ke beberapa konteks.
+const arRoot = createNode('root');
+const arSrc = createNode('sumber');
+const arB = createNode('tujuan B'); arB.id = 'b1';
+const arC = createNode('tujuan C'); arC.id = 'c1';
+arSrc.arrowlinks = [
+  { destination: 'b1', color: '#123456', startArrow: 'None', endArrow: 'Default', startInclination: null, endInclination: null },
+  { destination: 'c1', color: '#654321', startArrow: 'Default', endArrow: 'Default', startInclination: null, endInclination: null, sourceLabel: 'awal', middleLabel: 'tengah', targetLabel: 'akhir' },
+];
+arRoot.children = [arSrc, arB, arC];
+layout(arRoot);
+const arSvg = renderSVG(arRoot);
+m.arrow_multi_ok = (arSvg.match(/stroke="#123456"/g) || []).length === 1
+  && (arSvg.match(/stroke="#654321"/g) || []).length === 1 ? 1 : 0;
+const arBack = parseMM(serializeMM(arRoot));
+m.arrow_multi_roundtrip_ok = arBack.children[0].arrowlinks.length === 2
+  && arBack.children[0].arrowlinks[1].destination === 'c1' ? 1 : 0;
+m.arrow_labels_roundtrip_ok = arBack.children[0].arrowlinks[1].sourceLabel === 'awal'
+  && arBack.children[0].arrowlinks[1].middleLabel === 'tengah'
+  && arBack.children[0].arrowlinks[1].targetLabel === 'akhir' ? 1 : 0;
+m.arrow_label_svg_ok = arSvg.includes('>awal<') && arSvg.includes('>tengah<') && arSvg.includes('>akhir<') ? 1 : 0;
+
+// 15) panah bisa dipilih (hit-test kurva) dan ditekuk (inclination).
+const hRoot = createNode('root');
+const hSrc = createNode('S'); hSrc.id = 'hs';
+const hDst = createNode('T'); hDst.id = 'ht';
+hSrc.arrowlinks = [{ destination: 'ht', color: '#0000ff', startArrow: 'None', endArrow: 'Default' }];
+hRoot.children = [hSrc, hDst];
+layout(hRoot);
+const hg = arrowCurve(hSrc, hDst, hSrc.arrowlinks[0]);
+const t = 0.5, u = 1 - t;
+const mx = u * u * u * hg.s.x + 3 * u * u * t * hg.p3.x + 3 * u * t * t * hg.p4.x + t * t * t * hg.e.x;
+const my = u * u * u * hg.s.y + 3 * u * u * t * hg.p3.y + 3 * u * t * t * hg.p4.y + t * t * t * hg.e.y;
+const hHit = hitArrow(hRoot, mx, my, 2);
+const hMiss = hitArrow(hRoot, mx, my + 50, 2);
+m.arrow_hit_ok = hHit && hHit.node === hSrc && hHit.link === hSrc.arrowlinks[0] && !hMiss ? 1 : 0;
+const hm = arrowMidpoint(hSrc, hDst, hSrc.arrowlinks[0]);
+m.arrow_midpoint_ok = Math.abs(hm.x - mx) < 1e-6 && Math.abs(hm.y - my) < 1e-6 ? 1 : 0;
+hSrc.arrowlinks[0].startInclination = { x: hg.reach, y: 50 };
+hSrc.arrowlinks[0].endInclination = { x: hg.reach, y: 50 };
+const hg2 = arrowCurve(hSrc, hDst, hSrc.arrowlinks[0]);
+m.arrow_bend_ok = hg2.p3.y > hg.p3.y && hg2.p4.y > hg.p4.y ? 1 : 0;
+m.arrow_default_reach_ok = hg.reach === Math.max(40, Math.hypot(hg.e.x - hg.s.x, hg.e.y - hg.s.y)) ? 1 : 0;
+m.arrow_control_side_ok = (hSrc._side === 'left' ? hg.p3.x < hg.s.x : hg.p3.x > hg.s.x)
+  && (hDst._side === 'left' ? hg.p4.x < hg.e.x : hg.p4.x > hg.e.x) ? 1 : 0;
+
+// 16) navigasi keyboard spasial: panah memilih node terdekat pada arah itu.
+const navRoot = createNode('root');
+const navL = createNode('L'), navR = createNode('R');
+const navT = createNode('T'), navB = createNode('B');
+navRoot.children = [navL, navR, navT, navB];
+navRoot._contentX = 0; navRoot._contentY = 0; navRoot._w = 100; navRoot._h = 40;
+navL._contentX = -200; navL._contentY = 0; navL._w = 80; navL._h = 30;
+navR._contentX = 200; navR._contentY = 0; navR._w = 80; navR._h = 30;
+navT._contentX = 0; navT._contentY = -150; navT._w = 80; navT._h = 30;
+navB._contentX = 0; navB._contentY = 150; navB._w = 80; navB._h = 30;
+m.arrow_nav_ok = findNeighbor(navRoot, navRoot, 1, 0) === navR
+  && findNeighbor(navRoot, navRoot, -1, 0) === navL
+  && findNeighbor(navRoot, navRoot, 0, -1) === navT
+  && findNeighbor(navRoot, navRoot, 0, 1) === navB ? 1 : 0;
+
+// 17) perataan teks node (TEXT_ALIGN) tersimpan dan dipakai render SVG.
+const taRightRoot = createNode('rata kanan');
+taRightRoot.textAlign = 'RIGHT';
+layout(taRightRoot);
+const taRightBack = parseMM(serializeMM(taRightRoot));
+layout(taRightBack);
+const taRightSvg = renderSVG(taRightBack);
+const taLeftRoot = createNode('rata kiri');
+taLeftRoot.textAlign = 'LEFT';
+layout(taLeftRoot);
+const taLeftSvg = renderSVG(taLeftRoot);
+m.text_align_ok = taRightBack.textAlign === 'RIGHT' && taRightSvg.includes('text-anchor="end"')
+  && taLeftSvg.includes('text-anchor="start"') ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });

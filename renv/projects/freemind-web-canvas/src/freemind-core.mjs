@@ -102,8 +102,9 @@ const pointToXml = (p) => `${p.x};${p.y};`;
 export function createNode(text = '') {
   return {
     text, folded: false, position: null, style: null,
-    color: null, bg: null, edge: null, font: null,
+    color: null, bg: null, textAlign: null, edge: null, font: null,
     icons: [], rich: null, note: null, cloud: null, arrowlinks: [], attrs: [], children: [],
+    summary: false, firstGroup: false,
     hGap: HGAP, vGap: VGAP, shiftY: 0,
   };
 }
@@ -125,6 +126,7 @@ function buildNode(el) {
   node.color = a.COLOR || null;
   node.bg = a.BACKGROUND_COLOR || null;
   node.style = a.STYLE || null;
+  node.textAlign = a.TEXT_ALIGN || null;
   node.id = a.ID || null;
   node.link = a.LINK || null;
   node.hGap = parseInt(a.HGAP, 10) || HGAP;
@@ -157,12 +159,19 @@ function buildNode(el) {
           endArrow: c.attrs.ENDARROW || 'Default',
           startInclination: parsePoint(c.attrs.STARTINCLINATION),
           endInclination: parsePoint(c.attrs.ENDINCLINATION),
+          sourceLabel: c.attrs.SOURCE_LABEL || null,
+          middleLabel: c.attrs.MIDDLE_LABEL || null,
+          targetLabel: c.attrs.TARGET_LABEL || null,
         });
         break;
       case 'richcontent':
         if (c.attrs.TYPE === 'NOTE') node.note = c.raw; else node.rich = c.raw;
         break;
       case 'attribute': node.attrs.push({ name: c.attrs.NAME || '', value: c.attrs.VALUE || '' }); break;
+      case 'hook':
+        if (c.attrs.NAME === 'SummaryNode') node.summary = true;
+        else if (c.attrs.NAME === 'FirstGroupNode') node.firstGroup = true;
+        break;
       case 'node': node.children.push(buildNode(c)); break;
     }
   }
@@ -188,6 +197,7 @@ function serializeNode(node, depth) {
   if (node.style) A.push(`STYLE="${esc(node.style)}"`);
   if (node.color) A.push(`COLOR="${esc(node.color)}"`);
   if (node.bg) A.push(`BACKGROUND_COLOR="${esc(node.bg)}"`);
+  if (node.textAlign) A.push(`TEXT_ALIGN="${esc(node.textAlign)}"`);
   if (node.id) A.push(`ID="${esc(node.id)}"`);
   if (node.link) A.push(`LINK="${esc(node.link)}"`);
   if (node.hGap !== HGAP) A.push(`HGAP="${node.hGap}"`);
@@ -209,6 +219,9 @@ function serializeNode(node, depth) {
     const e = [];
     if (al.destination) e.push(`DESTINATION="${esc(al.destination)}"`);
     if (al.color) e.push(`COLOR="${esc(al.color)}"`);
+    if (al.sourceLabel) e.push(`SOURCE_LABEL="${esc(al.sourceLabel)}"`);
+    if (al.targetLabel) e.push(`TARGET_LABEL="${esc(al.targetLabel)}"`);
+    if (al.middleLabel) e.push(`MIDDLE_LABEL="${esc(al.middleLabel)}"`);
     e.push(`STARTARROW="${esc(al.startArrow)}"`, `ENDARROW="${esc(al.endArrow)}"`);
     if (al.startInclination) e.push(`STARTINCLINATION="${pointToXml(al.startInclination)}"`);
     if (al.endInclination) e.push(`ENDINCLINATION="${pointToXml(al.endInclination)}"`);
@@ -227,6 +240,8 @@ function serializeNode(node, depth) {
   for (const at of node.attrs) kids.push(`${ind}\t<attribute NAME="${esc(at.name)}" VALUE="${esc(at.value)}"/>`);
   if (node.rich !== null && node.rich !== undefined) kids.push(`${ind}\t<richcontent TYPE="NODE">${node.rich}</richcontent>`);
   if (node.note !== null && node.note !== undefined) kids.push(`${ind}\t<richcontent TYPE="NOTE">${node.note}</richcontent>`);
+  if (node.firstGroup) kids.push(`${ind}\t<hook NAME="FirstGroupNode"/>`);
+  if (node.summary) kids.push(`${ind}\t<hook NAME="SummaryNode"/>`);
   for (const c of node.children) kids.push(serializeNode(c, depth + 1));
 
   if (kids.length === 0) return `${ind}<node ${A.join(' ')}/>`;
@@ -294,13 +309,27 @@ function measureBBox(node) {
   // Node terlipat menyembunyikan seluruh subtree-nya: anak tidak menyumbang
   // ukuran (jadi sibling menggantikan ruangnya), sesuai perilaku FreeMind.
   const open = !node.folded;
-  const rh = open ? subtreeHeight(node._right, node.vGap) : 0;
-  const lh = open ? subtreeHeight(node._left, node.vGap) : 0;
+  const normalR = node._right.filter((c) => !c.summary);
+  const normalL = node._left.filter((c) => !c.summary);
+  const rh = open ? subtreeHeight(normalR, node.vGap) : 0;
+  const lh = open ? subtreeHeight(normalL, node.vGap) : 0;
   // HGap milik anak (jarak anak dari induk), sesuai NodeViewLayoutAdapter.getChildHorizontalShift.
-  const rExt = open && node._right.length ? Math.max(...node._right.map((c) => c.hGap + c._bw)) : 0;
-  const lExt = open && node._left.length ? Math.max(...node._left.map((c) => c.hGap + c._bw)) : 0;
+  let rExt = open && normalR.length ? Math.max(...normalR.map((c) => c.hGap + c._bw)) : 0;
+  let lExt = open && normalL.length ? Math.max(...normalL.map((c) => c.hGap + c._bw)) : 0;
+  // Summary node berada di luar grup (bukan baris sibling biasa), jadi lebar
+  // subtree-nya dihitung dari tepi luar grup + SUMMARY_HGAP.
+  if (open) {
+    const rContent = normalR.length ? Math.max(...normalR.map((c) => c.hGap + c._cx + c._w)) : 0;
+    const lContent = normalL.length ? Math.max(...normalL.map((c) => c.hGap + c._bw - c._cx)) : 0;
+    for (const c of node.children) {
+      if (!c.summary) continue;
+      if (c._side === 'left') lExt = Math.max(lExt, lContent + c.hGap + c._w + c._cx);
+      else rExt = Math.max(rExt, rContent + c.hGap + c._bw - c._cx);
+    }
+  }
+  const maxSummaryH = node.children.reduce((m, c) => (c.summary ? Math.max(m, c._bh) : m), 0);
   node._bw = lExt + node._w + rExt;
-  node._bh = Math.max(node._h, rh, lh);
+  node._bh = Math.max(node._h, rh, lh, maxSummaryH);
   node._cx = lExt;
   node._cy = (node._bh - node._h) / 2;
 }
@@ -314,7 +343,7 @@ function calcShiftY(c) {
 function place(node) {
   if (node.folded) return; // subtree tersembunyi tidak ditempatkan
   for (const side of ['right', 'left']) {
-    const list = node[`_${side}`];
+    const list = node[`_${side}`].filter((c) => !c.summary);
     const total = subtreeHeight(list, node.vGap);
     let y = node._contentY + node._h / 2 - total / 2;
     for (const c of list) {
@@ -326,6 +355,33 @@ function place(node) {
       c._contentY = y + c._cy;
       place(c);
       y += c._bh + node.vGap;
+    }
+  }
+  // Summary node: letakkan di luar grup (sisi terjauh) dan pusatkan pada
+  // rentang vertikal node yang diringkas (VerticalNodeViewLayoutStrategy).
+  for (const side of ['right', 'left']) {
+    for (const c of node[`_${side}`]) {
+      if (!c.summary) continue;
+      const group = summaryGroup(c);
+      if (!group.length) {
+        c._contentX = side === 'left'
+          ? node._contentX - c.hGap - c._w
+          : node._contentX + node._w + c.hGap;
+        c._contentY = node._contentY + node._h / 2 - baseH(c) / 2 + c.shiftY;
+      } else {
+        const left = side === 'left';
+        let top = Infinity, bottom = -Infinity, outer = left ? Infinity : -Infinity;
+        for (const g of group) {
+          top = Math.min(top, g._contentY);
+          bottom = Math.max(bottom, g._contentY + baseH(g));
+          outer = left
+            ? Math.min(outer, g._contentX)
+            : Math.max(outer, g._contentX + g._w);
+        }
+        c._contentX = left ? outer - c.hGap - c._w : outer + c.hGap;
+        c._contentY = (top + bottom) / 2 - baseH(c) / 2 + c.shiftY;
+      }
+      place(c);
     }
   }
 }
@@ -344,6 +400,65 @@ export function outPoint(node) {
 }
 
 // ---------------------------------------------------------------------------
+// Summary node (SummaryNode / FirstGroupNode Freeplane): node ringkasan adalah
+// sibling dari node yang diringkas; kurung (bracket) membentang dari node
+// pertama grup sampai node terakhir, lalu mengerucut ke node ringkasan.
+// Batas grup ditandai `firstGroup` pada sibling pertama (padanan hook
+// FirstGroupNode) dan/atau oleh ringkasan sebelumnya.
+// ---------------------------------------------------------------------------
+export const SUMMARY_GAP = 10;   // jarak bracket dari tepi luar grup
+export const SUMMARY_HGAP = 30;  // jarak default summary node dari tepi luar grup
+const SUMMARY_XCTRL = 4;         // SummaryEdgeView.XCTRL
+
+export function summaryGroup(summary) {
+  const p = summary && summary._parent;
+  if (!p || !summary.summary) return [];
+  const side = summary._side;
+  const i = p.children.indexOf(summary);
+  const out = [];
+  for (let j = i - 1; j >= 0; j--) {
+    const c = p.children[j];
+    if (c._side !== side) continue;
+    if (c.summary) break;
+    out.unshift(c);
+    if (c.firstGroup) break;
+  }
+  return out;
+}
+
+export function summaryBracket(summary) {
+  const group = summaryGroup(summary);
+  if (!group.length) return null;
+  const left = summary._side === 'left';
+  let top = Infinity, bottom = -Infinity, x = left ? Infinity : -Infinity;
+  for (const c of group) {
+    top = Math.min(top, c._contentY);
+    bottom = Math.max(bottom, c._contentY + baseH(c));
+    x = left ? Math.min(x, c._contentX) : Math.max(x, c._contentX + c._w);
+  }
+  x += left ? -SUMMARY_GAP : SUMMARY_GAP;
+  return { group, left, top, bottom, x, end: inPoint(summary) };
+}
+
+// Dua kurva bracket (atas & bawah) menuju titik masuk node ringkasan.
+function summaryEdgeStart(bracket) {
+  const sign = bracket.left ? -1 : 1;
+  return {
+    sign,
+    x: sign > 0
+      ? Math.min(bracket.x, bracket.end.x - EDGE_CHILD_XCTRL)
+      : Math.max(bracket.x, bracket.end.x + EDGE_CHILD_XCTRL),
+  };
+}
+
+export function summaryEdgePath(bracket, startY) {
+  const { sign, x } = summaryEdgeStart(bracket);
+  const e = bracket.end;
+  return `M ${x} ${startY} L ${x + sign * SUMMARY_XCTRL} ${startY} `
+    + `C ${x + sign * 2 * SUMMARY_XCTRL} ${startY} ${x} ${e.y} ${e.x} ${e.y}`;
+}
+
+// ---------------------------------------------------------------------------
 // Render Canvas 2D
 // ---------------------------------------------------------------------------
 export function buildIndex(root) {
@@ -357,9 +472,10 @@ export function render(ctx, root, opts = {}) {
   const index = buildIndex(root);
   const vis = new Set(visibleNodes(root));
   walk(root, (node) => { if (vis.has(node)) drawCloud(ctx, node); });
-  walk(root, (node) => { if (vis.has(node) && node._parent) drawEdge(ctx, node._parent, node); });
+  walk(root, (node) => { if (vis.has(node) && node._parent && !node.summary) drawEdge(ctx, node._parent, node); });
+  walk(root, (node) => { if (vis.has(node) && node.summary) drawSummaryEdge(ctx, node); });
   walk(root, (node) => { if (vis.has(node)) drawNode(ctx, node, opts, root); });
-  walk(root, (node) => { if (vis.has(node) && !node.folded) drawArrowLinks(ctx, node, index, opts.scale || 1, vis); });
+  walk(root, (node) => { if (vis.has(node) && !node.folded) drawArrowLinks(ctx, node, index, opts.scale || 1, vis, opts.selectedArrow || null); });
 }
 
 // Gambar subtree `node` yang diterjemahkan (tx,ty) — untuk ghost saat drag.
@@ -371,7 +487,7 @@ export function renderSubtreeAt(ctx, node, tx, ty, opts = {}) {
   ctx.globalAlpha = opts.alpha ?? 0.75;
   ctx.translate(tx, ty);
   for (const n of nodes) drawCloud(ctx, n);
-  for (const n of nodes) if (n._parent && set.has(n._parent)) drawEdge(ctx, n._parent, n);
+  for (const n of nodes) if (n._parent && set.has(n._parent) && !n.summary) drawEdge(ctx, n._parent, n);
   for (const n of nodes) drawNode(ctx, n, opts, root);
   ctx.restore();
 }
@@ -424,30 +540,195 @@ function drawEdge(ctx, parent, node) {
   ctx.restore();
 }
 
-function drawArrowLinks(ctx, node, index, scale = 1, vis = null) {
+function drawSummaryEdge(ctx, summary) {
+  const b = summaryBracket(summary);
+  if (!b) return;
+  const { sign, x } = summaryEdgeStart(b);
+  const m = summary.edge || {};
+  const color = m.color || summary._parent?.edge?.color || '#606060';
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = m.width || 1;
+  for (const y of [b.top, b.bottom]) {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + sign * SUMMARY_XCTRL, y);
+    ctx.bezierCurveTo(x + sign * 2 * SUMMARY_XCTRL, y, x, b.end.y, b.end.x, b.end.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function nodeCenter(n) {
+  return { x: n._contentX + n._w / 2, y: n._contentY + baseH(n) / 2 };
+}
+
+// Titik di tepi node yang menghadap titik `toward` (untuk panah antar-konteks).
+function boundaryPoint(n, toward) {
+  const x = n._contentX, y = n._contentY, w = n._w, h = baseH(n);
+  const c = nodeCenter(n);
+  const dx = toward.x - c.x, dy = toward.y - c.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? x + w : x, y: c.y };
+  return { x: c.x, y: dy >= 0 ? y + h : y };
+}
+
+function arrowEndpoints(source, target) {
+  const sc = nodeCenter(source), tc = nodeCenter(target);
+  const horizontal = Math.abs(tc.x - sc.x) >= Math.abs(tc.y - sc.y);
+  return {
+    s: boundaryPoint(source, tc),
+    e: boundaryPoint(target, sc),
+    sDir: horizontal ? (tc.x >= sc.x ? 1 : -1) : 0,
+    tDir: horizontal ? (sc.x >= tc.x ? 1 : -1) : 0,
+  };
+}
+
+// Geometri panah (dipakai Canvas, SVG, hit-test, dan panel).
+export function arrowCurve(source, target, al) {
+  const ep = arrowEndpoints(source, target);
+  // Freeplane/FreeMind: recommended control-point distance = jarak titik taut,
+  // minimal 40. Control point ditarik keluar dari sisi node (kiri/kanan).
+  const reach = Math.max(40, Math.hypot(ep.e.x - ep.s.x, ep.e.y - ep.s.y));
+  const si = al.startInclination || {};
+  const ei = al.endInclination || {};
+  const sx = si.x != null ? si.x : reach;
+  const sy = si.y != null ? si.y : 0;
+  const ex = ei.x != null ? ei.x : reach;
+  const ey = ei.y != null ? ei.y : 0;
+  const sDir = source._side === 'left' ? -1 : source._side === 'right' ? 1 : ep.sDir;
+  const tDir = target._side === 'left' ? -1 : target._side === 'right' ? 1 : ep.tDir;
+  return {
+    ...ep,
+    reach, sDir, tDir,
+    p3: { x: ep.s.x + sDir * sx, y: ep.s.y + sy },
+    p4: { x: ep.e.x + tDir * ex, y: ep.e.y + ey },
+  };
+}
+
+function bezierPoint(g, t) {
+  const u = 1 - t;
+  return {
+    x: u * u * u * g.s.x + 3 * u * u * t * g.p3.x + 3 * u * t * t * g.p4.x + t * t * t * g.e.x,
+    y: u * u * u * g.s.y + 3 * u * u * t * g.p3.y + 3 * u * t * t * g.p4.y + t * t * t * g.e.y,
+  };
+}
+export function arrowMidpoint(source, target, al) {
+  return bezierPoint(arrowCurve(source, target, al), 0.5);
+}
+
+function distToSegment(px, py, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+
+// Panah yang paling dekat dengan titik (untuk seleksi klik).
+export function hitArrow(root, px, py, tol = 6) {
+  const index = buildIndex(root);
+  const vis = new Set(visibleNodes(root));
+  let best = null, bestD = tol;
+  for (const n of vis) {
+    for (const al of n.arrowlinks) {
+      const target = index.get(al.destination);
+      if (!target || !vis.has(target)) continue;
+      const g = arrowCurve(n, target, al);
+      let prev = g.s;
+      for (let i = 1; i <= 32; i++) {
+        const p = bezierPoint(g, i / 32);
+        const d = distToSegment(px, py, prev, p);
+        if (d < bestD) { bestD = d; best = { node: n, link: al, target, distance: d }; }
+        prev = p;
+      }
+    }
+  }
+  return best;
+}
+
+function drawArrowLabel(ctx, text, x, y, align) {
+  const w = ctx.measureText(text).width;
+  const h = 14;
+  const left = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  roundRect(ctx, left - 2, y - h / 2, w + 4, h, 3);
+  ctx.fill();
+  ctx.fillStyle = '#333333';
+  ctx.fillText(text, x, y);
+}
+
+function drawArrowLinks(ctx, node, index, scale = 1, vis = null, selectedArrow = null) {
   const len = 8 / (scale || 1);
   for (const al of node.arrowlinks) {
     const target = index.get(al.destination);
     if (!target || (vis && !vis.has(target))) continue;
-    const s = outPoint(node);
-    const e = inPoint(target);
-    const sSign = node._side === 'left' ? -1 : 1;
-    const tSign = target._side === 'left' ? -1 : 1;
-    const dist = Math.hypot(e.x - s.x, e.y - s.y) || 30;
-    // Control point 3/4 (ArrowLinkView: p3 = p1 + sign·inclination).
-    const si = al.startInclination || { x: dist, y: 0 };
-    const ei = al.endInclination || { x: dist, y: 0 };
-    const p3 = { x: s.x + sSign * si.x, y: s.y + si.y };
-    const p4 = { x: e.x + tSign * ei.x, y: e.y + ei.y };
+    const g = arrowCurve(node, target, al);
+    const { s, e, p3, p4 } = g;
+    const color = al.color || '#0000ff';
+    const sel = selectedArrow && selectedArrow.link === al;
     ctx.save();
-    ctx.strokeStyle = al.color || '#0000ff';
-    ctx.lineWidth = 1;
+    if (sel) {
+      ctx.strokeStyle = 'rgba(49,106,197,0.35)';
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.bezierCurveTo(p3.x, p3.y, p4.x, p4.y, e.x, e.y);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = sel ? 2 : 1;
     ctx.beginPath();
     ctx.moveTo(s.x, s.y);
     ctx.bezierCurveTo(p3.x, p3.y, p4.x, p4.y, e.x, e.y);
     ctx.stroke();
-    if (al.startArrow && al.startArrow !== 'None') drawArrowHead(ctx, s.x, s.y, Math.atan2(s.y - p3.y, s.x - p3.x), al.color || '#0000ff', len);
-    if (al.endArrow && al.endArrow !== 'None') drawArrowHead(ctx, e.x, e.y, Math.atan2(e.y - p4.y, e.x - p4.x), al.color || '#0000ff', len);
+    if (al.startArrow && al.startArrow !== 'None') drawArrowHead(ctx, s.x, s.y, Math.atan2(s.y - p3.y, s.x - p3.x), color, len);
+    if (al.endArrow && al.endArrow !== 'None') drawArrowHead(ctx, e.x, e.y, Math.atan2(e.y - p4.y, e.x - p4.x), color, len);
+    if (al.sourceLabel || al.middleLabel || al.targetLabel) {
+      ctx.font = '12px sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      if (al.sourceLabel) {
+        const tw = ctx.measureText(al.sourceLabel).width;
+        const lx = p3.x > s.x ? s.x - tw - 4 : s.x + 4;
+        const ly = p3.y > s.y ? s.y + 4 + 7 : s.y - 4 - 7;
+        drawArrowLabel(ctx, al.sourceLabel, lx, ly, 'left');
+      }
+      if (al.targetLabel) {
+        const tw = ctx.measureText(al.targetLabel).width;
+        const lx = p4.x > e.x ? e.x - tw - 4 : e.x + 4;
+        const ly = p4.y > e.y ? e.y + 4 + 7 : e.y - 4 - 7;
+        drawArrowLabel(ctx, al.targetLabel, lx, ly, 'left');
+      }
+      if (al.middleLabel) {
+        const mid = bezierPoint(g, 0.5);
+        ctx.textAlign = 'center';
+        drawArrowLabel(ctx, al.middleLabel, mid.x, mid.y, 'center');
+      }
+    }
+    if (sel) {
+      // Titik kontrol seperti Freeplane: garis putus-putus ke p3/p4 + pegangannya.
+      const r = 4 / (scale || 1);
+      ctx.save();
+      ctx.setLineDash([4 / (scale || 1), 3 / (scale || 1)]);
+      ctx.strokeStyle = 'rgba(49,106,197,0.75)';
+      ctx.lineWidth = 1 / (scale || 1);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y); ctx.lineTo(p3.x, p3.y);
+      ctx.moveTo(e.x, e.y); ctx.lineTo(p4.x, p4.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#316ac5';
+      ctx.lineWidth = 1.5 / (scale || 1);
+      for (const p of [p3, p4]) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     ctx.restore();
   }
 }
@@ -623,7 +904,13 @@ function drawNode(ctx, node, opts, root) {
   //  kiri: ikon di kanan).
   const keys = iconKeys(node);
   const iconW = keys.length * ICON_SIZE;
-  const textX = node._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
+  const areaLeft = node._side === 'left' ? x : x + iconW;
+  const areaRight = node._side === 'left' ? x + w - iconW : x + w;
+  const align = String(node.textAlign || '').toLowerCase();
+  let textX;
+  if (align === 'left') { ctx.textAlign = 'left'; textX = areaLeft + 4; }
+  else if (align === 'right') { ctx.textAlign = 'right'; textX = areaRight - 4; }
+  else { ctx.textAlign = 'center'; textX = (areaLeft + areaRight) / 2; }
   const lines = textLines(node);
   const lineH = lineHeight(node);
   let ly = y + (h - lines.length * lineH) / 2 + lineH / 2;
@@ -632,10 +919,11 @@ function drawNode(ctx, node, opts, root) {
     ctx.fillText(line, textX, ly);
     if (node.font?.underline) {
       const tw = ctx.measureText(line).width;
+      const lx = align === 'left' ? textX : align === 'right' ? textX - tw : textX - tw / 2;
       const uy = ly + (node.font.size || 14) * 0.55;
       ctx.strokeStyle = node.color || '#101010';
       ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(textX - tw / 2, uy); ctx.lineTo(textX + tw / 2, uy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(lx, uy); ctx.lineTo(lx + tw, uy); ctx.stroke();
     }
     ly += lineH;
   }
@@ -727,6 +1015,26 @@ export function visibleNodes(root) {
   return out;
 }
 
+// Navigasi keyboard spasial: node terdekat pada arah (kx,ky) ∈ {-1,0,1}.
+// Skor = jarak searah + 3×jarak menyimpang, jadi node yang lurus diprioritaskan.
+export function findNeighbor(root, from, kx, ky) {
+  if (!from) return null;
+  const cx = from._contentX + (from._w || 0) / 2;
+  const cy = from._contentY + (from._h || 0) / 2;
+  let best = null, bestScore = Infinity;
+  for (const n of visibleNodes(root)) {
+    if (n === from) continue;
+    const dx = n._contentX + (n._w || 0) / 2 - cx;
+    const dy = n._contentY + (n._h || 0) / 2 - cy;
+    const primary = kx ? dx * kx : dy * ky;
+    if (primary <= 1) continue;
+    const secondary = kx ? Math.abs(dy) : Math.abs(dx);
+    const score = primary + secondary * 3;
+    if (score < bestScore) { bestScore = score; best = n; }
+  }
+  return best;
+}
+
 export const HIT_MARGIN = 4;
 
 export function hitTest(root, px, py) {
@@ -787,8 +1095,11 @@ export function cloneSubtree(node) {
   copy.folded = node.folded;
   copy.position = node.position;
   copy.style = node.style;
+  copy.summary = node.summary;
+  copy.firstGroup = node.firstGroup;
   copy.color = node.color;
   copy.bg = node.bg;
+  copy.textAlign = node.textAlign;
   copy.id = node.id || null;
   copy.link = node.link || null;
   copy.edge = node.edge ? { ...node.edge } : null;
@@ -897,7 +1208,7 @@ export function renderSVG(root, opts = {}) {
   });
 
   walk(root, (n) => {
-    if (!vis.has(n) || !n._parent) return;
+    if (!vis.has(n) || !n._parent || n.summary) return;
     const parent = n._parent;
     const s = outPoint(parent), e = inPoint(n);
     const sign = n._side === 'left' ? -1 : 1;
@@ -919,22 +1230,47 @@ export function renderSVG(root, opts = {}) {
   });
 
   walk(root, (n) => {
+    if (!vis.has(n) || !n.summary) return;
+    const b = summaryBracket(n);
+    if (!b) return;
+    const m = n.edge || {};
+    const stroke = m.color || n._parent?.edge?.color || '#606060';
+    for (const y of [b.top, b.bottom]) {
+      out.push(`<path d="${summaryEdgePath(b, y)}" fill="none" stroke="${stroke}" stroke-width="${m.width || 1}"/>`);
+    }
+  });
+
+  walk(root, (n) => {
     if (!vis.has(n) || n.folded) return;
     for (const al of n.arrowlinks) {
       const target = index.get(al.destination);
       if (!target || !vis.has(target)) continue;
-      const s = outPoint(n), e = inPoint(target);
-      const sSign = n._side === 'left' ? -1 : 1;
-      const tSign = target._side === 'left' ? -1 : 1;
-      const dist = Math.hypot(e.x - s.x, e.y - s.y) || 30;
-      const si = al.startInclination || { x: dist, y: 0 };
-      const ei = al.endInclination || { x: dist, y: 0 };
-      const p3 = { x: s.x + sSign * si.x, y: s.y + si.y };
-      const p4 = { x: e.x + tSign * ei.x, y: e.y + ei.y };
+      const { s, e, p3, p4 } = arrowCurve(n, target, al);
       const color = al.color || '#0000ff';
       out.push(`<path d="M ${s.x} ${s.y} C ${p3.x} ${p3.y} ${p4.x} ${p4.y} ${e.x} ${e.y}" fill="none" stroke="${color}"/>`);
       if (al.startArrow && al.startArrow !== 'None') out.push(`<polygon points="${arrowHeadPoints(s.x, s.y, Math.atan2(s.y - p3.y, s.x - p3.x), 8)}" fill="${color}"/>`);
       if (al.endArrow && al.endArrow !== 'None') out.push(`<polygon points="${arrowHeadPoints(e.x, e.y, Math.atan2(e.y - p4.y, e.x - p4.x), 8)}" fill="${color}"/>`);
+      const label = (text, x, y, anchor) => {
+        if (!text) return;
+        const w = String(text).length * 6.5 + 4;
+        const rx = anchor === 'middle' ? x - w / 2 : anchor === 'end' ? x - w : x;
+        out.push(`<rect x="${rx - 2}" y="${y - 8}" width="${w}" height="16" rx="3" fill="#ffffff" fill-opacity="0.9"/>`);
+        out.push(`<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="central" font-size="12" fill="#333333">${escXml(text)}</text>`);
+      };
+      const mid = bezierPoint(arrowCurve(n, target, al), 0.5);
+      if (al.middleLabel) label(al.middleLabel, mid.x, mid.y, 'middle');
+      if (al.sourceLabel) {
+        const tw = String(al.sourceLabel).length * 6.5;
+        const lx = p3.x > s.x ? s.x - tw - 4 : s.x + 4;
+        const ly = p3.y > s.y ? s.y + 4 + 7 : s.y - 4 - 7;
+        label(al.sourceLabel, lx, ly, 'start');
+      }
+      if (al.targetLabel) {
+        const tw = String(al.targetLabel).length * 6.5;
+        const lx = p4.x > e.x ? e.x - tw - 4 : e.x + 4;
+        const ly = p4.y > e.y ? e.y + 4 + 7 : e.y - 4 - 7;
+        label(al.targetLabel, lx, ly, 'start');
+      }
     }
   });
 
@@ -956,12 +1292,16 @@ export function renderSVG(root, opts = {}) {
     const fz = n.font?.size ? ` font-size="${n.font.size}"` : '';
     const keys = iconKeys(n);
     const iconW = keys.length * ICON_SIZE;
-    const textX = n._side === 'left' ? x + (w - iconW) / 2 : x + iconW + (w - iconW) / 2;
+    const areaLeft = n._side === 'left' ? x : x + iconW;
+    const areaRight = n._side === 'left' ? x + w - iconW : x + w;
+    const align = String(n.textAlign || '').toLowerCase();
+    const anchor = align === 'left' ? 'start' : align === 'right' ? 'end' : 'middle';
+    const textX = align === 'left' ? areaLeft + 4 : align === 'right' ? areaRight - 4 : (areaLeft + areaRight) / 2;
     const lines = textLines(n);
     const lineH = lineHeight(n);
     const y0 = y + (h - lines.length * lineH) / 2 + lineH / 2;
     lines.forEach((line, i) => {
-      out.push(`<text x="${textX}" y="${y0 + i * lineH}" text-anchor="middle" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(line)}</text>`);
+      out.push(`<text x="${textX}" y="${y0 + i * lineH}" text-anchor="${anchor}" dominant-baseline="central" fill="${n.color || '#101010'}"${fw}${fs}${fz}>${escXml(line)}</text>`);
     });
     let cx = n._side === 'left' ? x + w - iconW : x;
     for (const k of keys) {
