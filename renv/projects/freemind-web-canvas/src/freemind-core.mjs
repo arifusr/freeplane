@@ -109,6 +109,20 @@ export function createNode(text = '') {
   };
 }
 
+export function freshId(used) {
+  let id, i = 0;
+  do { id = 'ID_' + Date.now().toString(36) + '_' + (i++); } while (used.has(id));
+  used.add(id);
+  return id;
+}
+
+// ID yang sudah ada harus dipertahankan agar arrowlink lama tetap valid.
+export function ensureNodeId(node, used) {
+  if (node.id) { used.add(node.id); return node.id; }
+  node.id = freshId(used);
+  return node.id;
+}
+
 const toBool = (v) => v === 'true';
 
 export function parseMM(xml) {
@@ -275,7 +289,8 @@ let measureFn = (node) => {
 export function setMeasure(fn) { measureFn = fn; }
 
 // Teks node dapat multi-baris; setiap '\n' menjadi baris baru (NodeAdapter).
-export function textLines(node) { return String(node.text ?? '').split(/\r?\n/); }
+// Tab dirender sebagai 4 spasi agar indentasi terlihat sama di Canvas/SVG.
+export function textLines(node) { return String(node.text ?? '').replace(/\t/g, '    ').split(/\r?\n/); }
 export function lineHeight(node) {
   const f = node.font || {};
   return Math.max(14, (f.size || 14) * 1.2);
@@ -564,31 +579,36 @@ function nodeCenter(n) {
   return { x: n._contentX + n._w / 2, y: n._contentY + baseH(n) / 2 };
 }
 
-// Titik di tepi node yang menghadap titik `toward` (untuk panah antar-konteks).
-function boundaryPoint(n, toward) {
-  const x = n._contentX, y = n._contentY, w = n._w, h = baseH(n);
+// Titik di tepi node pada arah vektor `dir` dari pusat node (ray-rectangle).
+function boundaryPoint(n, dirX, dirY) {
   const c = nodeCenter(n);
-  const dx = toward.x - c.x, dy = toward.y - c.y;
-  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? x + w : x, y: c.y };
-  return { x: c.x, y: dy >= 0 ? y + h : y };
+  const hw = n._w / 2, hh = baseH(n) / 2;
+  const tx = dirX !== 0 ? hw / Math.abs(dirX) : Infinity;
+  const ty = dirY !== 0 ? hh / Math.abs(dirY) : Infinity;
+  const t = Math.min(tx, ty);
+  if (!isFinite(t)) return c;
+  return { x: c.x + dirX * t, y: c.y + dirY * t };
 }
 
 function arrowEndpoints(source, target) {
   const sc = nodeCenter(source), tc = nodeCenter(target);
-  const horizontal = Math.abs(tc.x - sc.x) >= Math.abs(tc.y - sc.y);
+  const dx = tc.x - sc.x, dy = tc.y - sc.y;
+  const d = Math.hypot(dx, dy);
+  // Arah selalu dari node sumber ke node tujuan; sisi map (kiri/kanan) tidak
+  // mengubah arah ekor/ujung panah. Fallback hanya untuk dua node bertumpuk.
+  const ux = d > 1e-6 ? dx / d : (source._side === 'left' ? -1 : 1);
+  const uy = d > 1e-6 ? dy / d : 0;
   return {
-    s: boundaryPoint(source, tc),
-    e: boundaryPoint(target, sc),
-    sDir: horizontal ? (tc.x >= sc.x ? 1 : -1) : 0,
-    tDir: horizontal ? (sc.x >= tc.x ? 1 : -1) : 0,
+    s: boundaryPoint(source, ux, uy),
+    e: boundaryPoint(target, -ux, -uy),
+    ux, uy, nx: -uy, ny: ux,
   };
 }
 
 // Geometri panah (dipakai Canvas, SVG, hit-test, dan panel).
 export function arrowCurve(source, target, al) {
   const ep = arrowEndpoints(source, target);
-  // Freeplane/FreeMind: recommended control-point distance = jarak titik taut,
-  // minimal 40. Control point ditarik keluar dari sisi node (kiri/kanan).
+  // Recommended control-point distance = jarak titik taut, minimal 40.
   const reach = Math.max(40, Math.hypot(ep.e.x - ep.s.x, ep.e.y - ep.s.y));
   const si = al.startInclination || {};
   const ei = al.endInclination || {};
@@ -596,13 +616,19 @@ export function arrowCurve(source, target, al) {
   const sy = si.y != null ? si.y : 0;
   const ex = ei.x != null ? ei.x : reach;
   const ey = ei.y != null ? ei.y : 0;
-  const sDir = source._side === 'left' ? -1 : source._side === 'right' ? 1 : ep.sDir;
-  const tDir = target._side === 'left' ? -1 : target._side === 'right' ? 1 : ep.tDir;
+  // Inclination x = panjang searah sumber->tujuan, y = tekukan tegak lurus.
+  // Vektor inclination juga menentukan di edge mana ekor/ujung menempel,
+  // sehingga menyeret control point dapat memindahkan tautan ke edge lain.
+  const svx = ep.ux * sx + ep.nx * sy;
+  const svy = ep.uy * sx + ep.ny * sy;
+  const evx = -ep.ux * ex + ep.nx * ey;
+  const evy = -ep.uy * ex + ep.ny * ey;
+  const s = (svx || svy) ? boundaryPoint(source, svx, svy) : ep.s;
+  const e = (evx || evy) ? boundaryPoint(target, evx, evy) : ep.e;
   return {
-    ...ep,
-    reach, sDir, tDir,
-    p3: { x: ep.s.x + sDir * sx, y: ep.s.y + sy },
-    p4: { x: ep.e.x + tDir * ex, y: ep.e.y + ey },
+    ...ep, s, e, reach,
+    p3: { x: s.x + svx, y: s.y + svy },
+    p4: { x: e.x + evx, y: e.y + evy },
   };
 }
 

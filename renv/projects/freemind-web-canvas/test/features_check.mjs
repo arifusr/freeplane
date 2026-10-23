@@ -5,6 +5,7 @@ import {
   createNode, layout, serializeMM, parseMM, renderSVG,
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
   resolvedStyle, ICON_SIZE, summaryGroup, summaryBracket, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor,
+  textLines, freshId, ensureNodeId,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -229,10 +230,33 @@ m.arrow_midpoint_ok = Math.abs(hm.x - mx) < 1e-6 && Math.abs(hm.y - my) < 1e-6 ?
 hSrc.arrowlinks[0].startInclination = { x: hg.reach, y: 50 };
 hSrc.arrowlinks[0].endInclination = { x: hg.reach, y: 50 };
 const hg2 = arrowCurve(hSrc, hDst, hSrc.arrowlinks[0]);
-m.arrow_bend_ok = hg2.p3.y > hg.p3.y && hg2.p4.y > hg.p4.y ? 1 : 0;
+const bend3 = (hg2.p3.x - hg.p3.x) * hg.nx + (hg2.p3.y - hg.p3.y) * hg.ny;
+const bend4 = (hg2.p4.x - hg.p4.x) * hg.nx + (hg2.p4.y - hg.p4.y) * hg.ny;
+m.arrow_bend_ok = bend3 > 0 && bend4 > 0 ? 1 : 0;
 m.arrow_default_reach_ok = hg.reach === Math.max(40, Math.hypot(hg.e.x - hg.s.x, hg.e.y - hg.s.y)) ? 1 : 0;
-m.arrow_control_side_ok = (hSrc._side === 'left' ? hg.p3.x < hg.s.x : hg.p3.x > hg.s.x)
-  && (hDst._side === 'left' ? hg.p4.x < hg.e.x : hg.p4.x > hg.e.x) ? 1 : 0;
+const dotStart = (hg.p3.x - hg.s.x) * hg.ux + (hg.p3.y - hg.s.y) * hg.uy;
+const dotEnd = (hg.e.x - hg.p4.x) * hg.ux + (hg.e.y - hg.p4.y) * hg.uy;
+m.arrow_control_relative_ok = dotStart > 0 && dotEnd > 0 ? 1 : 0;
+// Ekor node kiri menuju node kanan harus mengarah ke tujuan, bukan ke sisi map.
+const crossRoot = createNode('root');
+const crossL = createNode('kiri'); crossL.position = 'left';
+const crossR = createNode('kanan'); crossR.position = 'right';
+crossRoot.children = [crossL, crossR]; layout(crossRoot);
+const crossG = arrowCurve(crossL, crossR, { startArrow: 'None', endArrow: 'Default' });
+m.arrow_tail_relative_ok = crossG.ux > 0 && crossG.p3.x > crossG.s.x && crossG.p4.x < crossG.e.x ? 1 : 0;
+// Inclination juga memindahkan titik taut (ekor) ke edge lain, seperti Freeplane.
+const edgeS = createNode('S'); edgeS._contentX = 0; edgeS._contentY = 0; edgeS._w = 100; edgeS._h = 40;
+const edgeT = createNode('T'); edgeT._contentX = 300; edgeT._contentY = 0; edgeT._w = 100; edgeT._h = 40;
+const edgeDefault = arrowCurve(edgeS, edgeT, {});
+const edgeMoved = arrowCurve(edgeS, edgeT, { startInclination: { x: 0, y: 100 }, endInclination: null });
+m.arrow_tail_edge_ok = Math.abs(edgeDefault.s.x - 100) < 1e-9 && Math.abs(edgeDefault.s.y - 20) < 1e-9
+  && Math.abs(edgeMoved.s.x - 50) < 1e-9 && Math.abs(edgeMoved.s.y - 40) < 1e-9 ? 1 : 0;
+const idUsed = new Set(['ID_existing']);
+const idNode = createNode('tetap'); idNode.id = 'ID_existing';
+m.arrow_id_preserved_ok = ensureNodeId(idNode, idUsed) === 'ID_existing' && idNode.id === 'ID_existing' ? 1 : 0;
+const idNew = createNode('baru');
+const idValue = ensureNodeId(idNew, idUsed);
+m.arrow_id_generated_ok = idNew.id === idValue && idValue.startsWith('ID_') && idUsed.has(idValue) ? 1 : 0;
 
 // 16) navigasi keyboard spasial: panah memilih node terdekat pada arah itu.
 const navRoot = createNode('root');
@@ -262,6 +286,11 @@ layout(taLeftRoot);
 const taLeftSvg = renderSVG(taLeftRoot);
 m.text_align_ok = taRightBack.textAlign === 'RIGHT' && taRightSvg.includes('text-anchor="end"')
   && taLeftSvg.includes('text-anchor="start"') ? 1 : 0;
+
+// 18) indentasi: tab pada teks node dirender sebagai 4 spasi di setiap baris.
+const tabRoot = createNode('\tindent\n\tdua');
+layout(tabRoot);
+m.tab_indent_ok = JSON.stringify(textLines(tabRoot)) === JSON.stringify(['    indent', '    dua']) ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });

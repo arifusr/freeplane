@@ -131,7 +131,7 @@
 </div>
 <div id="tabbar"></div>
 <div id="panel" class="hidden"></div>
-<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · tombol panah = pindah seleksi · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Insert → Ringkasan Baru = ringkas saudara terpilih · Insert → Panah ke Node Terpilih = hubungkan node (yang pertama jadi sumber) · di editor: Enter selesai, Shift+Enter baris baru · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
+<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · tombol panah = pindah seleksi · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Shift+Tab = indentasi teks · Insert → Ringkasan Baru = ringkas saudara terpilih · Insert → Panah ke Node Terpilih = hubungkan node (yang pertama jadi sumber) · panah terpilih: seret titik kontrol/garis untuk pindah edge/tekuk · di editor: Enter selesai, Shift+Enter baris baru · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
 <canvas id="cv"></canvas>
 <textarea id="nodeedit" rows="1" autocomplete="off" spellcheck="false"></textarea>
 <input id="arrowedit" type="text" autocomplete="off" spellcheck="false">
@@ -154,7 +154,7 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
+import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
   from './freemind-core.mjs';
 import { BUILTIN_ICONS } from './icons-builtin.mjs';
 
@@ -514,7 +514,7 @@ function startEdit(node, opts = {}) {
 function finishEdit(cancel = false) {
   if (!editing) return;
   const { node, isNew } = editing;
-  const v = editor.value;
+  const v = editor.value.replace(/\t/g, INDENT);
   editing = null;
   editor.style.display = 'none';
   editor.value = '';
@@ -589,6 +589,11 @@ editor.addEventListener('keydown', (e) => {
     finishEdit(e.key === 'Escape');
     return;
   }
+  if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault(); e.stopPropagation();
+    insertEditorIndent();
+    return;
+  }
   // Shift+Enter = baris baru (default textarea); shortcut aplikasi tidak aktif saat mengetik.
   e.stopPropagation();
   if ((e.ctrlKey || e.metaKey) && ['s', 'o', 'p', 'f'].includes(e.key.toLowerCase())) e.preventDefault();
@@ -596,12 +601,39 @@ editor.addEventListener('keydown', (e) => {
 
 // Kursor menegaskan mode: pegangan oval & motion = 'move'; menyeret = 'grabbing';
 // di atas link = 'pointer' (tangan); di atas node = 'pointer'; latar = 'grab'.
+function arrowControlAt(w) {
+  if (!selectedArrow || !selectedArrow.node || !selectedArrow.link) return null;
+  const target = allNodes().find((x) => x.id === selectedArrow.link.destination);
+  if (!target) return null;
+  const g = arrowCurve(selectedArrow.node, target, selectedArrow.link);
+  const r = 9 / view.scale;
+  if (Math.hypot(w.x - g.p3.x, w.y - g.p3.y) <= r) return { ...selectedArrow, target, which: 'start' };
+  if (Math.hypot(w.x - g.p4.x, w.y - g.p4.y) <= r) return { ...selectedArrow, target, which: 'end' };
+  return null;
+}
+function beginArrowDrag(node, link, target, w, bendStart, bendEnd) {
+  const g = arrowCurve(node, target, link);
+  selectedArrow = { node, link };
+  selected = null; selection = new Set();
+  arrowDrag = {
+    node, link, target, origin: { x: w.x, y: w.y }, committed: false,
+    init: {
+      s: link.startInclination ? { ...link.startInclination } : { x: Math.round(g.reach), y: 0 },
+      e: link.endInclination ? { ...link.endInclination } : { x: Math.round(g.reach), y: 0 },
+    },
+    bendStart, bendEnd,
+  };
+  setCursor(w);
+  draw();
+  renderPanel();
+}
 function setCursor(w) {
   let c;
   if (moveDrag || arrowDrag) c = 'move';
   else if (nodeDrag && nodeDrag.moved) c = 'grabbing';
   else if (drag || band) c = 'grabbing';
   else if (hoverHandle) c = 'move';
+  else if (w && arrowControlAt(w)) c = 'move';
   else if (w && hitHandle(root, w.x, w.y)) c = 'move';
   else if (w && hitArrow(root, w.x, w.y, 7 / view.scale)) c = 'move';
   else if (w && (hitLink(root, w.x, w.y) || hitFold(root, w.x, w.y))) c = 'pointer';
@@ -660,10 +692,14 @@ cv.addEventListener('pointerdown', (e) => {
     return;
   }
   const foldNode = hitFold(root, w.x, w.y);
+  const arrowCtrl = arrowControlAt(w);
   const arrowHit = hitArrow(root, w.x, w.y, 7 / view.scale);
   if (foldNode) {
     selectedArrow = null;
     commit(); foldNode.folded = !foldNode.folded; selected = foldNode; selection = new Set([foldNode]); relayout();
+  } else if (arrowCtrl) {
+    beginArrowDrag(arrowCtrl.node, arrowCtrl.link, arrowCtrl.target, w,
+      arrowCtrl.which === 'start', arrowCtrl.which === 'end');
   } else if (handle) {
     selectedArrow = null;
     moveDrag = {
@@ -679,25 +715,12 @@ cv.addEventListener('pointerdown', (e) => {
     draw();
     renderPanel();
   } else if (arrowHit) {
-    selectedArrow = { node: arrowHit.node, link: arrowHit.link };
-    selected = null; selection = new Set();
     const g = arrowCurve(arrowHit.node, arrowHit.target, arrowHit.link);
     const dS = (w.x - g.s.x) ** 2 + (w.y - g.s.y) ** 2;
     const dT = (w.x - g.e.x) ** 2 + (w.y - g.e.y) ** 2;
-    arrowDrag = {
-      node: arrowHit.node, link: arrowHit.link, target: arrowHit.target,
-      origin: { x: w.x, y: w.y }, committed: false,
-      init: {
-        s: arrowHit.link.startInclination ? { ...arrowHit.link.startInclination } : { x: Math.round(g.reach), y: 0 },
-        e: arrowHit.link.endInclination ? { ...arrowHit.link.endInclination } : { x: Math.round(g.reach), y: 0 },
-      },
-      // Freeplane: ujung yang lebih dekat ikut ditekuk; tengah = keduanya.
-      bendStart: dS <= dT * 2.25,
-      bendEnd: dT <= dS * 2.25,
-    };
-    setCursor(w);
-    draw();
-    renderPanel();
+    // Freeplane: ujung yang lebih dekat ikut ditekuk; tengah = keduanya.
+    beginArrowDrag(arrowHit.node, arrowHit.link, arrowHit.target, w,
+      dS <= dT * 2.25, dT <= dS * 2.25);
   } else if (hit) {
     selectedArrow = null;
     if (e.shiftKey) {
@@ -763,8 +786,9 @@ cv.addEventListener('pointermove', (e) => {
         if (!link.endInclination) link.endInclination = { ...arrowDrag.init.e };
       }
       const link = arrowDrag.link;
-      if (arrowDrag.bendStart) adjustInclination(link.startInclination, dx, dy, arrowDrag.node._side === 'left');
-      if (arrowDrag.bendEnd) adjustInclination(link.endInclination, dx, dy, arrowDrag.target._side === 'left');
+      const g = arrowCurve(arrowDrag.node, arrowDrag.target, link);
+      if (arrowDrag.bendStart) adjustInclination(link.startInclination, dx, dy, g.ux, g.uy, false);
+      if (arrowDrag.bendEnd) adjustInclination(link.endInclination, dx, dy, g.ux, g.uy, true);
       arrowDrag.origin = { x: w.x, y: w.y };
     }
     draw();
@@ -911,6 +935,25 @@ function addSibling() {
   relayout();
   startEdit(n, { isNew: true });
 }
+
+const INDENT = '    ';
+function indentSelected(delta) {
+  const targets = (selection.size ? [...selection] : (selected ? [selected] : [])).filter(Boolean);
+  if (!targets.length) return;
+  const next = targets.map((n) => {
+    const lines = String(n.text ?? '').split(/\r?\n/);
+    return lines.map((line) => delta > 0 ? INDENT + line : line.replace(/^(?:\t| {1,4})/, '')).join('\n');
+  });
+  if (next.every((v, i) => v === targets[i].text)) return;
+  commit();
+  targets.forEach((n, i) => { n.text = next[i]; });
+  relayout();
+}
+function insertEditorIndent() {
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  editor.setRangeText(INDENT, s, e, 'end');
+  placeEditor();
+}
 function addSummary() {
   const base = selection.size ? [...selection] : (selected ? [selected] : []);
   const sel = base.filter((n) => n && n._parent);
@@ -942,17 +985,6 @@ function allNodes() {
   const out = [];
   (function rec(n) { out.push(n); for (const c of n.children) rec(c); })(root);
   return out;
-}
-function freshId(used) {
-  let id, i = 0;
-  do { id = 'ID_' + Date.now().toString(36) + '_' + (i++); } while (used.has(id));
-  used.add(id);
-  return id;
-}
-function ensureNodeId(n, used) {
-  if (n.id && !used.has(n.id)) { used.add(n.id); return n.id; }
-  n.id = freshId(used);
-  return n.id;
 }
 // Salinan/duplikat mendapat ID baru; panah internal diarahkan ke ID baru.
 function remapCloneIds(n) {
@@ -1173,6 +1205,9 @@ const MENUS = {
     { sep: 1 },
     { t: 'Pilih Semua', a: 'Ctrl+A', c: 'selectall' },
     { t: 'Pilih Cabang', c: 'selectbranch' },
+    { sep: 1 },
+    { t: 'Tambah Indentasi Teks', a: 'Shift+Tab', c: 'indent' },
+    { t: 'Kurangi Indentasi Teks', c: 'outdent' },
   ],
   view: [
     { t: 'Zoom In', a: 'Ctrl++', c: 'zoomin' },
@@ -1248,7 +1283,8 @@ const CMDS = {
   clearlocal: () => { if (confirm('Hapus simpanan peta di peramban?')) { clearLocal(); const el = document.getElementById('saveinfo'); if (el) el.textContent = 'Simpanan dihapus'; } },
   undo, redo, cut: cutNode, copy: copyNode, paste: pasteNode, dup: duplicateNode, del: remove,
   selectall: selectAll, selectbranch: selectBranch,
-  child: addChild, sibling: addSibling, summary: addSummary, connect, disconnect: removeArrows,
+  child: addChild, sibling: addSibling, indent: () => indentSelected(1), outdent: () => indentSelected(-1),
+  summary: addSummary, connect, disconnect: removeArrows,
   note: () => focusPanel('#p-note'),
   icons: () => { if (!selected) return; renderPanel(); const l = panel.querySelector('#p-iconlist'); if (l) l.style.display = 'flex'; },
   attr: () => { if (selected) mutate(() => selected.attrs.push({ name: 'nama', value: 'nilai' })); },
@@ -1320,6 +1356,7 @@ window.addEventListener('keydown', (e) => {
   else if (ctrl && e.key.toLowerCase() === 'o') { e.preventDefault(); document.getElementById('file').click(); }
   else if (e.key === 'F3') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
   else if (e.key === 'F2') { e.preventDefault(); if (selected) startEdit(selected); }
+  else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); indentSelected(1); }
   else if (e.key === 'Tab') { e.preventDefault(); addChild(); }
   else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
   else if (e.key === 'Delete' && selectedArrow) { e.preventDefault(); deleteSelectedArrow(); }
@@ -1386,9 +1423,12 @@ const NODE_STYLES = [['', '(default)'], ['fork', 'fork'], ['bubble', 'bubble'], 
 const TEXT_ALIGNS = [['', '(default)'], ['LEFT', 'kiri'], ['CENTER', 'tengah'], ['RIGHT', 'kanan']];
 const FONT_NAMES = [['', '(default)'], ['sans-serif', 'sans-serif'], ['serif', 'serif'], ['monospace', 'monospace']];
 
-function adjustInclination(inc, dx, dy, left) {
-  if (left) dx = -dx;
-  inc.x += dx; inc.y += dy;
+function adjustInclination(inc, dx, dy, ux, uy, end) {
+  // Ubah delta layar ke frame panah: x searah sumber->tujuan, y tegak lurus.
+  const along = dx * ux + dy * uy;
+  const normal = -dx * uy + dy * ux;
+  inc.x += end ? -along : along;
+  inc.y += normal;
   if (inc.x !== 0 && Math.abs(inc.y / inc.x) < 0.015) inc.y = 0;
   const k = Math.hypot(inc.x, inc.y);
   if (k < 10) {
@@ -1423,7 +1463,7 @@ function renderArrowPanel() {
     <div class="row"><label>Akhir</label><input id="a-tl" type="text" value="${esc(link.targetLabel || '')}" placeholder="(kosong)" style="flex:1;min-width:0"></div>
     <div class="row"><label>Tekuk</label><input id="a-bend" type="range" min="-150" max="150" step="1" value="${bend}" style="flex:1"><span id="a-bend-v">${bend}</span></div>
     <div class="row"><button id="a-reset">Default</button><button id="a-del">Hapus panah</button></div>
-    <div class="row" style="color:#888;font-size:11px">Klik garis panah untuk pilih; dobel-klik = edit teks tengah; seret untuk menekuk; Del hapus. Teks awal/akhir di atas.</div>`;
+    <div class="row" style="color:#888;font-size:11px">Klik garis panah untuk pilih; dobel-klik = edit teks tengah; seret garis/titik kontrol untuk menekuk dan memindah tautan ke edge lain; Del hapus. Teks awal/akhir di atas.</div>`;
   const $ = (id) => panel.querySelector(id);
   const setBend = (v) => {
     if (!target) return;
