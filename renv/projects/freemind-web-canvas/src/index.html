@@ -49,7 +49,21 @@
                                 border-radius: 2px; padding: 0 3px; height: 17px; min-width: 50px; max-width: 170px; outline: none; }
   canvas { position: fixed; top: 80px; left: 0; width: 100%; height: calc(100% - 80px); display: block; cursor: grab; touch-action: none; }
   canvas:active { cursor: grabbing; }
-  #hint { position: fixed; bottom: 6px; left: 8px; color: #777; font-size: 11px; max-width: 70vw; z-index: 5; }
+  /* Dialog bantuan (dipindah dari pojok kiri bawah ke menu Help). */
+  #helpdlg { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+             padding: 24px; background: rgba(0,0,0,.28); }
+  #helpdlg.hidden { display: none; }
+  #helpdlg .helpbox { width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+                      background: #fff; border: 1px solid #9a9a9a; border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.28); }
+  #helpdlg h2 { margin: 0; padding: 10px 14px; font-size: 13px; color: #1a1a1a; background: linear-gradient(#f6f6f6,#e4e4e4);
+                border-bottom: 1px solid #b7b7b7; border-radius: 6px 6px 0 0; }
+  #helpdlg .helpbody { padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55; color: #333; }
+  #helpdlg .helpbody h3 { margin: 10px 0 4px; font-size: 12px; color: #555; border-bottom: 1px solid #eee; padding-bottom: 2px; }
+  #helpdlg .helpbody h3:first-child { margin-top: 0; }
+  #helpdlg .helpbody ul { margin: 0; padding-left: 18px; }
+  #helpdlg .helpbody li { margin: 1px 0; }
+  #helpdlg .helpfoot { padding: 8px 14px; border-top: 1px solid #e0e0e0; text-align: right; }
+  #helpdlg .helpfoot button { padding: 4px 14px; font-size: 12px; }
   #panel { position: fixed; top: 86px; right: 8px; z-index: 20; width: 260px; max-height: calc(100vh - 94px);
            overflow: auto; background: rgba(255,255,255,.96); border: 1px solid #ccc; border-radius: 8px;
            padding: 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
@@ -131,7 +145,51 @@
 </div>
 <div id="tabbar"></div>
 <div id="panel" class="hidden"></div>
-<div id="hint">Klik/tap pilih · Shift+klik = multi-pilih · Shift+seret latar = seleksi kotak · dobel-klik edit · tombol panah = pindah seleksi · Ctrl+klik link = buka · klik lingkaran tepi = fold · geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara) · panel kanan = catatan/ikon/warna/gaya/edge/font/atribut · Space fold · Tab/Enter/Del · Shift+Tab = indentasi teks · Insert → Ringkasan Baru = ringkas saudara terpilih · Insert → Panah ke Node Terpilih = hubungkan node (yang pertama jadi sumber) · panah terpilih: seret titik kontrol/garis untuk pindah edge/tekuk · di editor: Enter selesai, Shift+Enter baris baru · Ctrl+C/X/V/D · Ctrl+F cari, F3 berikutnya · Ctrl+Z/Y · scroll/cubit/± zoom · drag latar = pan · tersimpan otomatis di peramban (Ctrl+S simpan, Ctrl+Shift+S unduh .mm, menu File untuk pulihkan/hapus) · tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti, dobel-klik nama = ubah</div>
+<div id="helpdlg" class="hidden" role="dialog" aria-modal="true" aria-labelledby="helpdlg-title">
+  <div class="helpbox">
+    <h2 id="helpdlg-title">Bantuan &amp; Pintasan</h2>
+    <div class="helpbody">
+      <h3>Navigasi &amp; seleksi</h3>
+      <ul>
+        <li>Klik/tap pilih · Shift+klik = multi-pilih</li>
+        <li>Shift+seret latar = seleksi kotak</li>
+        <li>Tombol panah = pindah seleksi · Ctrl+klik link = buka</li>
+        <li>Scroll/cubit/tombol ± = zoom · seret latar = pan</li>
+      </ul>
+      <h3>Node</h3>
+      <ul>
+        <li>Dobel-klik = edit · Tab = anak baru · Enter = saudara baru · Del = hapus</li>
+        <li>Klik lingkaran tepi atau Space = fold</li>
+        <li>Geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara)</li>
+        <li>Shift+Tab = indentasi teks · Shift+Enter = baris baru saat mengedit</li>
+      </ul>
+      <h3>Panel kanan</h3>
+      <ul>
+        <li>Catatan/ikon/warna/gaya/edge/font/atribut</li>
+      </ul>
+      <h3>Menu Insert</h3>
+      <ul>
+        <li>Ringkasan Baru = ringkas saudara terpilih</li>
+        <li>Panah ke Node Terpilih = hubungkan node (yang pertama jadi sumber)</li>
+      </ul>
+      <h3>Panah</h3>
+      <ul>
+        <li>Panah terpilih: seret titik kontrol/garis untuk pindah edge/tekuk</li>
+      </ul>
+      <h3>Pintasan</h3>
+      <ul>
+        <li>Ctrl+C/X/V/D · Ctrl+Z/Y · Ctrl+F cari, F3 berikutnya</li>
+        <li>Ctrl+S simpan · Ctrl+Shift+S unduh .mm · Ctrl+O buka</li>
+        <li>Tab: Ctrl+T baru, Ctrl+W tutup, Ctrl+Tab ganti · dobel-klik nama tab = ubah</li>
+      </ul>
+      <h3>Penyimpanan</h3>
+      <ul>
+        <li>Tersimpan otomatis di peramban · menu File untuk pulihkan/hapus</li>
+      </ul>
+    </div>
+    <div class="helpfoot"><button id="helpdlg-close">Tutup</button></div>
+  </div>
+</div>
 <canvas id="cv"></canvas>
 <textarea id="nodeedit" rows="1" autocomplete="off" spellcheck="false"></textarea>
 <input id="arrowedit" type="text" autocomplete="off" spellcheck="false">
@@ -154,7 +212,7 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
+import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, inheritVisualAttributes, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
   from './freemind-core.mjs';
 import { BUILTIN_ICONS } from './icons-builtin.mjs';
 
@@ -918,7 +976,7 @@ function addChild() {
   if (!selected) return;
   commit();
   const n = makeNode(selected._side === 'left' ? 'left' : null);
-  n.style = selected.style || null;   // ikuti gaya node asal
+  inheritVisualAttributes(n, selected);   // ikuti format node asal
   selected.children.push(n);
   selected.folded = false;
   selected = n; selection = new Set([n]);
@@ -929,7 +987,7 @@ function addSibling() {
   if (!selected || !selected._parent) return;
   commit();
   const n = makeNode(selected.position);
-  n.style = selected.style || null;   // ikuti gaya node asal
+  inheritVisualAttributes(n, selected);   // ikuti format node asal
   selected._parent.children.push(n);
   selected = n; selection = new Set([n]);
   relayout();
@@ -1175,6 +1233,13 @@ function focusPanel(sel) { if (!selected) return; renderPanel(); const el = pane
 function focusPanelInput(sel) { if (!selected) return; renderPanel(); const el = panel.querySelector(sel); if (el) { el.focus(); try { el.showPicker && el.showPicker(); } catch (e) {} } }
 function about() { alert('FreeMind Web Canvas — prototipe\nRekonstruksi inti FreeMind (Java/Swing) ke Canvas 2D.\nIkon & perilaku mengikuti FreeMind (GPLv2).'); }
 
+// Dialog bantuan: konten pintasan kini hanya tampil dari menu Help (F1).
+const helpdlg = document.getElementById('helpdlg');
+function showHelp() { closeMenus(); helpdlg.classList.remove('hidden'); document.getElementById('helpdlg-close').focus(); }
+function hideHelp() { helpdlg.classList.add('hidden'); }
+document.getElementById('helpdlg-close').onclick = hideHelp;
+helpdlg.addEventListener('click', (e) => { if (e.target === helpdlg) hideHelp(); });
+
 // Bilah menu bergaya FreeMind (padanan MenuBar.java).
 const MENUS = {
   file: [
@@ -1267,6 +1332,8 @@ const MENUS = {
     { t: 'Ganti Nama Tab…', c: 'renametab' },
   ],
   help: [
+    { t: 'Bantuan / Pintasan', a: 'F1', c: 'help' },
+    { sep: 1 },
     { t: 'Tentang FreeMind Web Canvas', c: 'about' },
   ],
 };
@@ -1298,6 +1365,7 @@ const CMDS = {
   unfoldall: () => { commit(); foldAll(root, false); relayout(); },
   movetoroot: moveToRoot, find: startSearch,
   findnext: () => findNext(1), findprev: () => findNext(-1),
+  help: showHelp,
   about,
 };
 let menuActive = false;
@@ -1334,6 +1402,11 @@ buildMenu();
 window.addEventListener('keydown', (e) => {
   if (editing || arrowEditing) return;   // editor node/label panah menangani input sendiri
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || '')) return;
+  if (!helpdlg.classList.contains('hidden')) {
+    if (e.key === 'Escape') { e.preventDefault(); hideHelp(); }
+    return;
+  }
+  if (e.key === 'F1') { e.preventDefault(); showHelp(); return; }
   if (e.key === 'Escape') { closeMenus(); if (selectedArrow) { selectedArrow = null; draw(); renderPanel(); } return; }
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }

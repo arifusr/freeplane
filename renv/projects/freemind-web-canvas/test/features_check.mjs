@@ -5,7 +5,7 @@ import {
   createNode, layout, serializeMM, parseMM, renderSVG,
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
   resolvedStyle, ICON_SIZE, summaryGroup, summaryBracket, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor,
-  textLines, freshId, ensureNodeId,
+  textLines, freshId, ensureNodeId, inheritVisualAttributes,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -291,6 +291,21 @@ m.text_align_ok = taRightBack.textAlign === 'RIGHT' && taRightSvg.includes('text
 const tabRoot = createNode('\tindent\n\tdua');
 layout(tabRoot);
 m.tab_indent_ok = JSON.stringify(textLines(tabRoot)) === JSON.stringify(['    indent', '    dua']) ? 1 : 0;
+
+// 19) node baru mewarisi font (termasuk ukuran), warna, latar, dan edge dari node aktif.
+const inhSrc = createNode('aktif');
+inhSrc.style = 'bubble'; inhSrc.color = '#ff0000'; inhSrc.bg = '#eeeeee';
+inhSrc.font = { name: 'Arial', size: 20, bold: true, italic: true, underline: true };
+inhSrc.edge = { style: 'linear', color: '#00ff00', width: 3 };
+const inhChild = inheritVisualAttributes(createNode('anak'), inhSrc);
+const inhSibling = inheritVisualAttributes(createNode('saudara'), inhSrc);
+const sameFormat = (a, b) => JSON.stringify([a.style, a.color, a.bg, a.font, a.edge])
+  === JSON.stringify([b.style, b.color, b.bg, b.font, b.edge]);
+m.inherit_child_format_ok = sameFormat(inhChild, inhSrc) ? 1 : 0;
+m.inherit_sibling_format_ok = sameFormat(inhSibling, inhSrc) ? 1 : 0;
+m.inherit_font_size_ok = inhChild.font.size === 20 ? 1 : 0;
+m.inherit_no_shared_ref_ok = inhChild.font !== inhSrc.font && inhChild.edge !== inhSrc.edge ? 1 : 0;
+m.inherit_null_ok = sameFormat(inheritVisualAttributes(createNode('x'), createNode('kosong')), createNode('kosong')) ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });

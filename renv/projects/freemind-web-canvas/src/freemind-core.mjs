@@ -1115,6 +1115,18 @@ export function foldAll(root, folded) {
   (function rec(n) { if (n.children.length) n.folded = !!folded; for (const c of n.children) rec(c); })(root);
 }
 
+// Wariskan format dari node aktif ke node baru (child/sibling): gaya, warna,
+// latar, font (termasuk ukuran), dan edge. Objek disalin agar tidak berbagi referensi.
+export function inheritVisualAttributes(target, source) {
+  if (!source) return target;
+  target.style = source.style ?? null;
+  target.color = source.color ?? null;
+  target.bg = source.bg ?? null;
+  target.font = source.font ? { ...source.font } : null;
+  target.edge = source.edge ? { ...source.edge } : null;
+  return target;
+}
+
 // Klon subtree (hanya model; tanpa field runtime _parent/_contentX/…).
 export function cloneSubtree(node) {
   const copy = createNode(node.text);
