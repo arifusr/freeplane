@@ -159,6 +159,7 @@
       <h3>Node</h3>
       <ul>
         <li>Dobel-klik = edit · Tab = anak baru · Enter = saudara baru · Del = hapus</li>
+        <li>Ctrl+↑/↓ = naikkan/turunkan urutan node di antara saudara</li>
         <li>Klik lingkaran tepi atau Space = fold</li>
         <li>Geser node = pindah · geser oval tepi = atur posisi (Ctrl = jarak saudara)</li>
         <li>Shift+Tab = indentasi teks · Shift+Enter = baris baru saat mengedit</li>
@@ -212,7 +213,7 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, inheritVisualAttributes, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
+import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, inheritVisualAttributes, reorderSiblings, insertSiblingAfter, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
   from './freemind-core.mjs';
 import { BUILTIN_ICONS } from './icons-builtin.mjs';
 
@@ -988,10 +989,22 @@ function addSibling() {
   commit();
   const n = makeNode(selected.position);
   inheritVisualAttributes(n, selected);   // ikuti format node asal
-  selected._parent.children.push(n);
+  insertSiblingAfter(selected._parent, selected, n);   // tepat setelah saudara aktif
   selected = n; selection = new Set([n]);
   relayout();
   startEdit(n, { isNew: true });
+}
+
+// Ctrl+↑/↓: pindah urutan node di antara saudara (NodeUpAction/NodeDownAction).
+function moveSelectedNodes(direction) {
+  const targets = (selection.size ? [...selection] : (selected ? [selected] : [])).filter(Boolean);
+  const children = reorderSiblings(targets, direction);
+  if (!children) return;
+  const n = targets.find((x) => x._parent) || targets[0];
+  commit();
+  n._parent.children = children;
+  relayout();
+  ensureVisible(targets[0]);
 }
 
 const INDENT = '    ';
@@ -1323,6 +1336,9 @@ const MENUS = {
   navigate: [
     { t: 'Ke Akar', c: 'movetoroot' },
     { sep: 1 },
+    { t: 'Node Naik', a: 'Ctrl+↑', c: 'nodeup' },
+    { t: 'Node Turun', a: 'Ctrl+↓', c: 'nodedown' },
+    { sep: 1 },
     { t: 'Cari…', a: 'Ctrl+F', c: 'find' },
     { t: 'Cari Berikutnya', a: 'F3', c: 'findnext' },
     { t: 'Cari Sebelumnya', a: 'Shift+F3', c: 'findprev' },
@@ -1363,7 +1379,7 @@ const CMDS = {
   zoomin: () => zoomBy(1.2), zoomout: () => zoomBy(1 / 1.2), zoom100: zoomReset, fit,
   foldall: () => { commit(); foldAll(root, true); relayout(); },
   unfoldall: () => { commit(); foldAll(root, false); relayout(); },
-  movetoroot: moveToRoot, find: startSearch,
+  movetoroot: moveToRoot, nodeup: () => moveSelectedNodes(-1), nodedown: () => moveSelectedNodes(1), find: startSearch,
   findnext: () => findNext(1), findprev: () => findNext(-1),
   help: showHelp,
   about,
@@ -1435,6 +1451,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Delete' && selectedArrow) { e.preventDefault(); deleteSelectedArrow(); }
   else if (e.key === 'Delete') remove();
   else if (e.key === ' ') { e.preventDefault(); fold(); }
+  else if (ctrl && !e.shiftKey && !e.altKey && e.key === 'ArrowUp') { e.preventDefault(); moveSelectedNodes(-1); }
+  else if (ctrl && !e.shiftKey && !e.altKey && e.key === 'ArrowDown') { e.preventDefault(); moveSelectedNodes(1); }
   else if (!ctrl && !e.altKey && e.key === 'ArrowRight') { e.preventDefault(); moveSelectionDir(1, 0); }
   else if (!ctrl && !e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); moveSelectionDir(-1, 0); }
   else if (!ctrl && !e.altKey && e.key === 'ArrowUp') { e.preventDefault(); moveSelectionDir(0, -1); }

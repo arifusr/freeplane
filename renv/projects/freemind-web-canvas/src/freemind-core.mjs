@@ -1116,15 +1116,60 @@ export function foldAll(root, folded) {
 }
 
 // Wariskan format dari node aktif ke node baru (child/sibling): gaya, warna,
-// latar, font (termasuk ukuran), dan edge. Objek disalin agar tidak berbagi referensi.
+// latar, rata teks, font (termasuk ukuran), dan edge. Objek disalin agar tidak berbagi referensi.
 export function inheritVisualAttributes(target, source) {
   if (!source) return target;
   target.style = source.style ?? null;
   target.color = source.color ?? null;
   target.bg = source.bg ?? null;
+  target.textAlign = source.textAlign ?? null;
   target.font = source.font ? { ...source.font } : null;
   target.edge = source.edge ? { ...source.edge } : null;
   return target;
+}
+
+// NewChildAction (NEW_SIBLING_BEHIND): saudara baru disisipkan tepat setelah
+// node aktif, bukan di akhir daftar anak.
+export function insertSiblingAfter(parent, sibling, node) {
+  if (!parent || !sibling || !node) return false;
+  const index = parent.children.indexOf(sibling);
+  if (index < 0) return false;
+  parent.children.splice(index + 1, 0, node);
+  return true;
+}
+
+// NodeUpAction/NodeDownAction: geser node terpilih satu posisi di antara
+// saudara pada sisi yang sama (multi-seleksi harus berurutan, wrap-around).
+// Mengembalikan array children baru atau null bila tidak ada perubahan.
+export function reorderSiblings(nodes, direction) {
+  const selected = (nodes || []).filter((n) => n && n._parent && !n.summary);
+  if (!selected.length) return null;
+  const parent = selected[0]._parent;
+  const side = selected[0]._side;
+  if (selected.some((n) => n._parent !== parent || n._side !== side)) return null;
+  const sibs = parent.children.filter((c) => c._side === side && !c.summary);
+  const idxs = selected.map((n) => sibs.indexOf(n)).filter((i) => i >= 0).sort((a, b) => a - b);
+  if (idxs.length !== selected.length || new Set(idxs).size !== idxs.length) return null;
+  for (let i = 1; i < idxs.length; i++) {
+    if (idxs[i] !== idxs[i - 1] + 1) return null;
+  }
+  const start = idxs[0], end = idxs[idxs.length - 1];
+  const seg = sibs.slice(start, end + 1);
+  let next;
+  if (direction < 0) {
+    next = start > 0
+      ? [...sibs.slice(0, start - 1), ...seg, sibs[start - 1], ...sibs.slice(end + 1)]
+      : [...sibs.slice(end + 1), ...seg];
+  } else {
+    next = end < sibs.length - 1
+      ? [...sibs.slice(0, start), sibs[end + 1], ...seg, ...sibs.slice(end + 2)]
+      : [...seg, ...sibs.slice(0, start)];
+  }
+  if (next.every((n, i) => n === sibs[i])) return null;
+  const positions = sibs.map((s) => parent.children.indexOf(s));
+  const children = parent.children.slice();
+  positions.forEach((p, i) => { children[p] = next[i]; });
+  return children;
 }
 
 // Klon subtree (hanya model; tanpa field runtime _parent/_contentX/…).

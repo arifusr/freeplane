@@ -5,7 +5,7 @@ import {
   createNode, layout, serializeMM, parseMM, renderSVG,
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
   resolvedStyle, ICON_SIZE, summaryGroup, summaryBracket, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor,
-  textLines, freshId, ensureNodeId, inheritVisualAttributes,
+  textLines, freshId, ensureNodeId, inheritVisualAttributes, reorderSiblings, insertSiblingAfter,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -294,18 +294,47 @@ m.tab_indent_ok = JSON.stringify(textLines(tabRoot)) === JSON.stringify(['    in
 
 // 19) node baru mewarisi font (termasuk ukuran), warna, latar, dan edge dari node aktif.
 const inhSrc = createNode('aktif');
-inhSrc.style = 'bubble'; inhSrc.color = '#ff0000'; inhSrc.bg = '#eeeeee';
+inhSrc.style = 'bubble'; inhSrc.color = '#ff0000'; inhSrc.bg = '#eeeeee'; inhSrc.textAlign = 'center';
 inhSrc.font = { name: 'Arial', size: 20, bold: true, italic: true, underline: true };
 inhSrc.edge = { style: 'linear', color: '#00ff00', width: 3 };
 const inhChild = inheritVisualAttributes(createNode('anak'), inhSrc);
 const inhSibling = inheritVisualAttributes(createNode('saudara'), inhSrc);
-const sameFormat = (a, b) => JSON.stringify([a.style, a.color, a.bg, a.font, a.edge])
-  === JSON.stringify([b.style, b.color, b.bg, b.font, b.edge]);
+const sameFormat = (a, b) => JSON.stringify([a.style, a.color, a.bg, a.textAlign, a.font, a.edge])
+  === JSON.stringify([b.style, b.color, b.bg, b.textAlign, b.font, b.edge]);
 m.inherit_child_format_ok = sameFormat(inhChild, inhSrc) ? 1 : 0;
 m.inherit_sibling_format_ok = sameFormat(inhSibling, inhSrc) ? 1 : 0;
 m.inherit_font_size_ok = inhChild.font.size === 20 ? 1 : 0;
+m.inherit_text_align_ok = inhChild.textAlign === 'center' && inhSibling.textAlign === 'center' ? 1 : 0;
 m.inherit_no_shared_ref_ok = inhChild.font !== inhSrc.font && inhChild.edge !== inhSrc.edge ? 1 : 0;
 m.inherit_null_ok = sameFormat(inheritVisualAttributes(createNode('x'), createNode('kosong')), createNode('kosong')) ? 1 : 0;
+
+// 20) Ctrl+↑/↓ (NodeUpAction/NodeDownAction): geser urutan antar-saudara.
+const rr = createNode('root');
+const ra = createNode('A'), rb = createNode('B'), rc = createNode('C');
+rr.children = [ra, rb, rc]; layout(rr);
+const texts = (list) => list.map((n) => n.text).join('');
+m.node_up_ok = texts(reorderSiblings([rc], -1)) === 'ACB' ? 1 : 0;
+m.node_down_ok = texts(reorderSiblings([ra], 1)) === 'BAC' ? 1 : 0;
+m.node_up_wrap_ok = texts(reorderSiblings([ra], -1)) === 'BCA' ? 1 : 0;
+m.node_down_wrap_ok = texts(reorderSiblings([rc], 1)) === 'CAB' ? 1 : 0;
+m.node_up_multi_ok = texts(reorderSiblings([rb, rc], -1)) === 'BCA' ? 1 : 0;
+m.node_down_multi_ok = texts(reorderSiblings([ra, rb], 1)) === 'CAB' ? 1 : 0;
+m.node_up_nonadjacent_ok = reorderSiblings([ra, rc], -1) === null ? 1 : 0;
+m.node_up_root_noop_ok = reorderSiblings([rr], -1) === null ? 1 : 0;
+const rl = createNode('kiri'); rl.position = 'left';
+const rroot = createNode('akar'); rroot.children = [rl, ra, rb]; layout(rroot);
+const mixed = reorderSiblings([rb], -1);
+m.node_up_preserves_side_ok = mixed && mixed[0] === rl && mixed[1] === rb && mixed[2] === ra ? 1 : 0;
+
+// 21) saudara baru disisipkan tepat SETELAH node aktif (bukan di akhir).
+const insRoot = createNode('root');
+const i1 = createNode('satu'), i2 = createNode('dua');
+insRoot.children = [i1, i2];
+insertSiblingAfter(insRoot, i1, createNode('baru'));
+m.sibling_insert_middle_ok = insRoot.children.map((n) => n.text).join(',') === 'satu,baru,dua' ? 1 : 0;
+const ins3 = createNode('tiga'); insRoot.children = [i1, i2, ins3];
+insertSiblingAfter(insRoot, i2, createNode('tengah'));
+m.sibling_insert_middle3_ok = insRoot.children.map((n) => n.text).join(',') === 'satu,dua,tengah,tiga' ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });
