@@ -50,20 +50,26 @@
   canvas { position: fixed; top: 80px; left: 0; width: 100%; height: calc(100% - 80px); display: block; cursor: grab; touch-action: none; }
   canvas:active { cursor: grabbing; }
   /* Dialog bantuan (dipindah dari pojok kiri bawah ke menu Help). */
-  #helpdlg { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  #helpdlg, #archdlg { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
              padding: 24px; background: rgba(0,0,0,.28); }
-  #helpdlg.hidden { display: none; }
-  #helpdlg .helpbox { width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+  #helpdlg.hidden, #archdlg.hidden { display: none; }
+  #helpdlg .helpbox, #archdlg .helpbox { width: min(680px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
                       background: #fff; border: 1px solid #9a9a9a; border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.28); }
-  #helpdlg h2 { margin: 0; padding: 10px 14px; font-size: 13px; color: #1a1a1a; background: linear-gradient(#f6f6f6,#e4e4e4);
+  #helpdlg h2, #archdlg h2 { margin: 0; padding: 10px 14px; font-size: 13px; color: #1a1a1a; background: linear-gradient(#f6f6f6,#e4e4e4);
                 border-bottom: 1px solid #b7b7b7; border-radius: 6px 6px 0 0; }
-  #helpdlg .helpbody { padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55; color: #333; }
+  #helpdlg .helpbody, #archdlg .helpbody { padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55; color: #333; }
   #helpdlg .helpbody h3 { margin: 10px 0 4px; font-size: 12px; color: #555; border-bottom: 1px solid #eee; padding-bottom: 2px; }
   #helpdlg .helpbody h3:first-child { margin-top: 0; }
   #helpdlg .helpbody ul { margin: 0; padding-left: 18px; }
   #helpdlg .helpbody li { margin: 1px 0; }
-  #helpdlg .helpfoot { padding: 8px 14px; border-top: 1px solid #e0e0e0; text-align: right; }
-  #helpdlg .helpfoot button { padding: 4px 14px; font-size: 12px; }
+  #helpdlg .helpfoot, #archdlg .helpfoot { padding: 8px 14px; border-top: 1px solid #e0e0e0; text-align: right; }
+  #helpdlg .helpfoot button, #archdlg .helpfoot button { padding: 4px 14px; font-size: 12px; }
+  /* Baris entri riwayat peta ditutup. */
+  #archdlg .archrow { display: flex; align-items: center; gap: 8px; padding: 4px 2px; border-bottom: 1px dashed #eee; }
+  #archdlg .archrow .aname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #archdlg .archrow .atime { color: #888; font-size: 11px; white-space: nowrap; }
+  #archdlg .archrow button { padding: 2px 8px; font-size: 11px; cursor: pointer; }
+  #archdlg .arempty { color: #888; }
   #panel { position: fixed; top: 86px; right: 8px; z-index: 20; width: 260px; max-height: calc(100vh - 94px);
            overflow: auto; background: rgba(255,255,255,.96); border: 1px solid #ccc; border-radius: 8px;
            padding: 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
@@ -186,9 +192,17 @@
       <h3>Penyimpanan</h3>
       <ul>
         <li>Tersimpan otomatis di peramban · menu File untuk pulihkan/hapus</li>
+        <li>Peta tab yang ditutup dipindah ke Riwayat (File &gt; Riwayat Peta Ditutup), tidak langsung hilang</li>
       </ul>
     </div>
     <div class="helpfoot"><button id="helpdlg-close">Tutup</button></div>
+  </div>
+</div>
+<div id="archdlg" class="hidden" role="dialog" aria-modal="true" aria-labelledby="archdlg-title">
+  <div class="helpbox">
+    <h2 id="archdlg-title">Riwayat Peta Ditutup</h2>
+    <div class="helpbody" id="archlist"></div>
+    <div class="helpfoot"><button id="archdlg-clear">Kosongkan</button> <button id="archdlg-close">Tutup</button></div>
   </div>
 </div>
 <canvas id="cv"></canvas>
@@ -213,7 +227,7 @@
 </script>
 
 <script type="module">
-import { parseMM, serializeMM, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, inheritVisualAttributes, reorderSiblings, insertSiblingAfter, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
+import { parseMM, serializeMM, archivePush, archiveRemove, layout, render, renderSubtreeAt, visibleNodes, hitTest, hitHandle, hitFold, hitLink, drawHandle, boundingBox, setMeasure, foldAll, cloneSubtree, inheritVisualAttributes, reorderSiblings, insertSiblingAfter, iconKeys, iconRowWidth, fontString, attrVisible, textLines, lineHeight, ICON_SIZE, SPACE_AROUND, HGAP, VGAP, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor, freshId, ensureNodeId, ATTR_ROW_H, ATTR_PAD, ATTR_FONT }
   from './freemind-core.mjs';
 import { BUILTIN_ICONS } from './icons-builtin.mjs';
 
@@ -293,6 +307,61 @@ function restoreLocal() {
   adoptActive(); updateTabbar(); relayout(); fit();
 }
 
+// --- Arsip peta ditutup (localStorage `:closed.v1`) ---------------------------
+// Tab yang ditutup dipindah ke riwayat, jadi tidak langsung hilang dari
+// peramban; dibuka kembali lewat menu File > Riwayat Peta Ditutup.
+const CLOSED_KEY = 'freemind-web-canvas:closed.v1';
+let closedList = loadClosed();
+function loadClosed() {
+  try {
+    const o = JSON.parse(localStorage.getItem(CLOSED_KEY) || 'null');
+    return Array.isArray(o) ? o.filter((e) => e && typeof e.mm === 'string' && e.mm.trim()) : [];
+  } catch (e) { return []; }
+}
+function saveClosed() {
+  try { localStorage.setItem(CLOSED_KEY, JSON.stringify(closedList)); }
+  catch (e) { if (!lsWarned) { lsWarned = true; console.warn('localStorage tidak tersedia:', e && e.message); } }
+}
+// Pindahkan satu tab ke arsip (dipanggil sebelum tab lenyap dari tabs).
+function archiveTab(i) {
+  const d = tabs[i]; if (!d) return;
+  closedList = archivePush(closedList, { name: d.name, mm: serializeMM(d.root) });
+  saveClosed();
+}
+function closedNodeCount(e) {
+  try {
+    let c = 0;
+    (function rec(n) { c++; for (const ch of n.children) rec(ch); })(parseMM(e.mm));
+    return c;
+  } catch (e) { return 0; }
+}
+// Buka kembali entri arsip sebagai tab baru, lalu entri dikeluarkan dari arsip.
+function reopenClosed(i) {
+  const e = closedList[i]; if (!e) return;
+  closedList = archiveRemove(closedList, i); saveClosed();
+  addTab(e.name || 'Peta', parseMM(e.mm));
+  hideArchive();
+}
+function deleteClosed(i) { closedList = archiveRemove(closedList, i); saveClosed(); showArchive(); }
+function clearClosed() {
+  if (!confirm('Kosongkan seluruh riwayat peta ditutup?')) return;
+  closedList = []; saveClosed(); showArchive();
+}
+function showArchive() {
+  closeMenus();
+  const box = document.getElementById('archlist');
+  if (!box) return;
+  box.innerHTML = closedList.length
+    ? closedList.map((e, i) =>
+        `<div class="archrow"><span class="aname" title="${esc(e.name || 'Peta')}">${esc(e.name || 'Peta')}</span>` +
+        `<span class="atime">${String(closedNodeCount(e))} node · ${esc(new Date(e.closedAt || 0).toLocaleString())}</span>` +
+        `<button data-archopen="${i}">Buka Kembali</button><button data-archdel="${i}" title="hapus dari riwayat">×</button></div>`).join('')
+    : '<p class="arempty">Riwayat kosong — peta yang ditutup akan tersimpan di sini.</p>';
+  archdlg.classList.remove('hidden');
+  document.getElementById('archdlg-close').focus();
+}
+function hideArchive() { archdlg.classList.add('hidden'); }
+
 // --- Tab --------------------------------------------------------------------
 function updateTabbar() {
   const bar = document.getElementById('tabbar');
@@ -323,6 +392,7 @@ function addTab(name, r) {
 function closeTab(i) {
   if (tabs.length <= 1) { alert('Minimal satu tab harus tetap terbuka.'); return; }
   stashActive();
+  archiveTab(i);   // simpan dulu ke riwayat sebelum tab dihapus
   tabs.splice(i, 1);
   if (activeTab >= tabs.length) activeTab = tabs.length - 1; else if (activeTab > i) activeTab--;
   adoptActive(); updateTabbar(); relayout(); fit(); scheduleSaveLocal();
@@ -1253,6 +1323,18 @@ function hideHelp() { helpdlg.classList.add('hidden'); }
 document.getElementById('helpdlg-close').onclick = hideHelp;
 helpdlg.addEventListener('click', (e) => { if (e.target === helpdlg) hideHelp(); });
 
+// Dialog riwayat peta ditutup.
+const archdlg = document.getElementById('archdlg');
+document.getElementById('archdlg-close').onclick = hideArchive;
+document.getElementById('archdlg-clear').onclick = clearClosed;
+archdlg.addEventListener('click', (e) => {
+  if (e.target === archdlg) { hideArchive(); return; }
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.archopen !== undefined) reopenClosed(Number(b.dataset.archopen));
+  else if (b.dataset.archdel !== undefined) deleteClosed(Number(b.dataset.archdel));
+});
+
 // Bilah menu bergaya FreeMind (padanan MenuBar.java).
 const MENUS = {
   file: [
@@ -1264,6 +1346,7 @@ const MENUS = {
     { t: 'Unduh .mm…', a: 'Ctrl+Shift+S', c: 'export' },
     { sep: 1 },
     { t: 'Pulihkan dari Peramban', c: 'restorelocal' },
+    { t: 'Riwayat Peta Ditutup…', c: 'archlist' },
     { t: 'Hapus Simpanan', c: 'clearlocal' },
     { sep: 1 },
     { t: 'Baru', a: 'Ctrl+N', disabled: 1 },
@@ -1363,6 +1446,7 @@ const CMDS = {
   renametab: () => renameTab(activeTab),
   savelocal: saveLocal,
   restorelocal: restoreLocal,
+  archlist: showArchive,
   clearlocal: () => { if (confirm('Hapus simpanan peta di peramban?')) { clearLocal(); const el = document.getElementById('saveinfo'); if (el) el.textContent = 'Simpanan dihapus'; } },
   undo, redo, cut: cutNode, copy: copyNode, paste: pasteNode, dup: duplicateNode, del: remove,
   selectall: selectAll, selectbranch: selectBranch,
@@ -1420,6 +1504,10 @@ window.addEventListener('keydown', (e) => {
   if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || '')) return;
   if (!helpdlg.classList.contains('hidden')) {
     if (e.key === 'Escape') { e.preventDefault(); hideHelp(); }
+    return;
+  }
+  if (!archdlg.classList.contains('hidden')) {
+    if (e.key === 'Escape') { e.preventDefault(); hideArchive(); }
     return;
   }
   if (e.key === 'F1') { e.preventDefault(); showHelp(); return; }

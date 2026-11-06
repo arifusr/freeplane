@@ -1172,6 +1172,21 @@ export function reorderSiblings(nodes, direction) {
   return children;
 }
 
+// Arsip map yang ditutup (padanan FreeMind: peta tetap di Master Map / riwayat
+// saat jendela ditutup). Fungsi murni — persistensi localStorage ada di UI.
+// Entri: { name, mm, closedAt }; yang terlama tergeser saat daftar penuh.
+export const ARCHIVE_MAX = 20;
+export function archivePush(list, entry, max = ARCHIVE_MAX) {
+  const next = Array.isArray(list) ? list.slice() : [];
+  if (entry && entry.mm) next.push(entry);
+  while (next.length > max) next.shift();
+  return next;
+}
+export function archiveRemove(list, index) {
+  if (!Array.isArray(list) || index < 0 || index >= list.length) return list;
+  return list.slice(0, index).concat(list.slice(index + 1));
+}
+
 // Klon subtree (hanya model; tanpa field runtime _parent/_contentX/…).
 export function cloneSubtree(node) {
   const copy = createNode(node.text);

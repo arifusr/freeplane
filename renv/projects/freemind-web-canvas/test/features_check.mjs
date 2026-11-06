@@ -6,6 +6,7 @@ import {
   iconKeys, iconRowWidth, fontString, cloneSubtree, foldAll, visibleNodes, attrVisible,
   resolvedStyle, ICON_SIZE, summaryGroup, summaryBracket, SUMMARY_HGAP, arrowCurve, arrowMidpoint, hitArrow, findNeighbor,
   textLines, freshId, ensureNodeId, inheritVisualAttributes, reorderSiblings, insertSiblingAfter,
+  ARCHIVE_MAX, archivePush, archiveRemove,
 } from '../src/freemind-core.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -335,6 +336,25 @@ m.sibling_insert_middle_ok = insRoot.children.map((n) => n.text).join(',') === '
 const ins3 = createNode('tiga'); insRoot.children = [i1, i2, ins3];
 insertSiblingAfter(insRoot, i2, createNode('tengah'));
 m.sibling_insert_middle3_ok = insRoot.children.map((n) => n.text).join(',') === 'satu,dua,tengah,tiga' ? 1 : 0;
+
+// 22) arsip peta ditutup: push menambah, penuh menggeser yang terlama,
+//     entri punya name/mm/closedAt, dan roundtrip mm arsip identik.
+const archRoot = parseMM('<map version="1.0.1"><node TEXT="Peta arsip"><node TEXT="anak"/></node></map>');
+const archMm = serializeMM(archRoot);
+let arch = archivePush([], { name: 'A', mm: archMm, closedAt: '2026-01-01T00:00:00Z' });
+m.archive_entry_shape_ok = arch.length === 1 && arch[0].name === 'A' && arch[0].mm === archMm &&
+  /^[0-9:T-]+Z$/.test(arch[0].closedAt) ? 1 : 0;
+for (let k = 1; k <= ARCHIVE_MAX; k++) arch = archivePush(arch, { name: 'k' + k, mm: 'mm' + k, closedAt: 'x' });
+m.archive_evict_ok = arch.length === ARCHIVE_MAX && arch[0].name === 'k1' && arch.at(-1).name === 'k20' &&
+  !arch.some((e) => e.name === 'A') ? 1 : 0;
+m.archive_rmid_ok = JSON.stringify(archiveRemove(arch, 0).map((e) => e.name)) ===
+  JSON.stringify(Array.from({ length: ARCHIVE_MAX - 1 }, (_, j) => 'k' + (j + 2))) ? 1 : 0;
+m.archive_rmid_bounds_ok = archiveRemove(arch, -1) === arch && archiveRemove(arch, 999) === arch &&
+  archiveRemove(null, 0) === null ? 1 : 0;
+const archBack = parseMM(archMm);
+m.archive_roundtrip_ok = archBack.text === 'Peta arsip' && archBack.children.length === 1 &&
+  archBack.children[0].text === 'anak' ? 1 : 0;
+m.archive_empty_ok = archivePush(arch, { name: '', mm: '' }).length === ARCHIVE_MAX ? 1 : 0;
 
 m.ok = Object.values(m).every((v) => v === 1) ? 1 : 0;
 fs.mkdirSync(outDir, { recursive: true });
