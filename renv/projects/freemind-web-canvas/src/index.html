@@ -791,7 +791,18 @@ function zoomBy(factor) {
   view.scale *= factor;
   draw();
 }
-function zoomReset() { view.scale = 1; draw(); }
+function zoomReset() {
+  view.scale = 1;
+  // Pusatkan peta di tengah viewport — tanpa ini, setelah zoom-out/pan jauh,
+  // peta bisa tertinggal di luar layar dan "hilang" saat kembali ke 100%.
+  if (root) {
+    const { w: cw, h: ch } = cssSize();
+    const bb = boundingBox(root);
+    view.x = (cw - (bb.minX + bb.maxX) * view.scale) / 2;
+    view.y = (ch - (bb.minY + bb.maxY) * view.scale) / 2;
+  }
+  draw();
+}
 
 cv.style.touchAction = 'none';
 const pointers = new Map();
