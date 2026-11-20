@@ -4,6 +4,8 @@
 /*
 !.gitignore
 !README-cloudshell.txt
+!README.md
+!cli/
 !research/
 !renv-tutorial-id/
 !renv/
@@ -50,6 +52,7 @@ __pycache__/
 *.db-wal
 *.log
 renv/cockpit/dist/
+cli/dist/
 
 # firebase deploy cache
 **/.firebase/

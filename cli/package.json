@@ -1,0 +1,29 @@
+{
+  "name": "freeplane-graph-cli",
+  "version": "1.0.0",
+  "description": "CLI and Graph Database Engine for Freeplane / FreeMind Mind Maps",
+  "type": "module",
+  "main": "src/index.mjs",
+  "bin": {
+    "fmap": "./bin/fmap.mjs"
+  },
+  "scripts": {
+    "test": "node test/cli_test.mjs",
+    "build:bin": "node build/build-binary.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "mindmap",
+    "freeplane",
+    "freemind",
+    "graph-database",
+    "ladybugdb",
+    "sqlite",
+    "cli",
+    "tui"
+  ],
+  "author": "arifusr",
+  "license": "GPL-2.0-or-later"
+}
