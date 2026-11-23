@@ -4,6 +4,7 @@ use crate::formatter::{
 use crate::model::TreeNode;
 use crate::storage::LadybugStorage;
 use anyhow::Result;
+use chrono::{Local, NaiveDateTime, TimeZone, Utc};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -262,16 +263,16 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     ),
                 ]),
                 Line::from(vec![
-                    Span::styled("Dibuat   : ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Dibuat lokal : ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        selected_node.created_at.as_deref().unwrap_or("(tidak tersedia)"),
+                        format_local_timestamp(selected_node.created_at.as_deref()),
                         Style::default().fg(Color::White),
                     ),
                 ]),
                 Line::from(vec![
-                    Span::styled("Diperbarui: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Update lokal : ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        selected_node.updated_at.as_deref().unwrap_or("(tidak tersedia)"),
+                        format_local_timestamp(selected_node.updated_at.as_deref()),
                         Style::default().fg(Color::White),
                     ),
                 ]),
@@ -453,6 +454,20 @@ fn tui_loop<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+fn format_local_timestamp(timestamp: Option<&str>) -> String {
+    let Some(timestamp) = timestamp else {
+        return "(tidak tersedia)".to_string();
+    };
+    let Ok(utc_time) = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.3f") else {
+        return timestamp.to_string();
+    };
+
+    Utc.from_utc_datetime(&utc_time)
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M:%S%.3f %:z")
+        .to_string()
 }
 
 fn render_canvas_viewport(
