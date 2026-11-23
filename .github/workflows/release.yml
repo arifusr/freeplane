@@ -1,0 +1,64 @@
+name: Release fmap CLI (Rust)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & Release Linux x86_64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fmap-rs -> target"
+
+      - name: Download Prebuilt LadybugDB Library
+        run: |
+          cd fmap-rs
+          cargo fetch
+          # Cari direktori crate lbug yang ter-fetch di cargo registry
+          LBUG_DIR=$(find ~/.cargo/registry/src -name "lbug-*" -type d | head -n1)
+          if [ -d "$LBUG_DIR" ]; then
+            echo "Menyiapkan prebuilt liblbug di $LBUG_DIR..."
+            cd "$LBUG_DIR"
+            LBUG_LIB_KIND=static LBUG_LINUX_VARIANT=compat bash ./scripts/download_lbug.sh
+            mkdir -p .cache/lbug-prebuilt/latest-compat/lib
+            cp -r .cache/lbug-prebuilt/lib/* .cache/lbug-prebuilt/latest-compat/lib/
+          fi
+
+      - name: Build Standalone Release Binary
+        run: |
+          cd fmap-rs
+          cargo build --release
+          strip target/release/fmap
+
+      - name: Package Release Assets
+        run: |
+          cd fmap-rs/target/release
+          tar -czf fmap-linux-x86_64.tar.gz fmap
+          sha256sum fmap-linux-x86_64.tar.gz > fmap-linux-x86_64.tar.gz.sha256
+          ls -lh fmap-linux-x86_64.tar.gz
+
+      - name: Upload Artifacts to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            fmap-rs/target/release/fmap-linux-x86_64.tar.gz
+            fmap-rs/target/release/fmap-linux-x86_64.tar.gz.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+

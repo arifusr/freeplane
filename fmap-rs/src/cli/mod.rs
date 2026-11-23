@@ -40,6 +40,8 @@ pub enum Commands {
     #[command(about = "Buka Interactive TUI (v = Canvas 2D)")]
     Ui {
         map_id: String,
+        #[arg(long, help = "Buka langsung dalam mode 2D Canvas")]
+        canvas: bool,
     },
 
     #[command(about = "Pencarian teks & catatan di mindmap")]

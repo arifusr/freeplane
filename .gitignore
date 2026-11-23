@@ -5,6 +5,8 @@
 !.gitignore
 !README-cloudshell.txt
 !README.md
+!install.sh
+!.github/
 !cli/
 !research/
 !renv-tutorial-id/
@@ -56,6 +58,7 @@ __pycache__/
 *.lbug-*
 fmap-rs/target/
 fmap-rs/bin/
+fmap-rs/dist/
 *.log
 renv/cockpit/dist/
 cli/dist/

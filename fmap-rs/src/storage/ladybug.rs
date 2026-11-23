@@ -440,6 +440,17 @@ impl LadybugStorage {
         Ok(None)
     }
 
+    pub fn update_node_folded(&self, node_id: &str, folded: bool) -> Result<()> {
+        let conn = self.conn()?;
+        let q = format!(
+            "MATCH (n:MapNode {{id: '{}'}}) SET n.folded = {}",
+            esc_cypher(node_id),
+            folded
+        );
+        conn.query(&q).context("Gagal update status folded node")?;
+        Ok(())
+    }
+
     pub fn execute_cypher(&self, cypher_query: &str) -> Result<String> {
         let conn = self.conn()?;
         let res = conn.query(cypher_query).context("Gagal eksekusi query Cypher")?;

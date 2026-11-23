@@ -160,8 +160,8 @@ fn main() -> Result<()> {
             println!("\n🧠 Mindmap 2D Canvas [ID: {}]\n\n{}\n", map_id, canvas);
         }
 
-        Commands::Ui { map_id } => {
-            tui::run_interactive_tui(&storage, &map_id)?;
+        Commands::Ui { map_id, canvas } => {
+            tui::run_interactive_tui(&storage, &map_id, canvas)?;
         }
 
         Commands::Search { query, map } => {

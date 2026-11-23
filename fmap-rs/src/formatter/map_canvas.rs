@@ -18,30 +18,56 @@ impl Default for CanvasOptions {
     }
 }
 
-#[allow(dead_code)]
-struct LayoutNode<'a> {
-    node: &'a TreeNode,
-    depth: usize,
-    label: String,
-    has_children: bool,
-    marker: String,
-    width: usize,
-    x: usize,
-    y: usize,
-    parent_idx: Option<usize>,
+#[derive(Clone, Debug)]
+pub struct CanvasNodeInfo {
+    pub id: String,
+    pub text: String,
+    pub depth: usize,
+    pub label: String,
+    pub has_children: bool,
+    pub folded: bool,
+    pub marker: String,
+    pub width: usize,
+    pub x: usize,
+    pub y: usize,
+    pub parent_idx: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanvasData {
+    pub nodes: Vec<CanvasNodeInfo>,
+    pub width: usize,
+    pub height: usize,
+    pub grid: Vec<Vec<char>>,
+    pub ascii: bool,
+}
+
+impl CanvasData {
+    pub fn to_string(&self) -> String {
+        self.grid
+            .iter()
+            .map(|row| row.iter().collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 pub fn render_canvas(root: &TreeNode, options: &CanvasOptions) -> String {
-    let mut layout_nodes: Vec<LayoutNode> = Vec::new();
+    let data = compute_canvas(root, options);
+    data.to_string()
+}
+
+pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
+    let mut layout_nodes: Vec<CanvasNodeInfo> = Vec::new();
     let mut max_depth = 0;
 
-    fn collect<'a>(
-        n: &'a TreeNode,
+    fn collect(
+        n: &TreeNode,
         depth: usize,
         parent_idx: Option<usize>,
         max_depth: &mut usize,
         options: &CanvasOptions,
-        list: &mut Vec<LayoutNode<'a>>,
+        list: &mut Vec<CanvasNodeInfo>,
     ) {
         if depth > *max_depth {
             *max_depth = depth;
@@ -64,11 +90,13 @@ pub fn render_canvas(root: &TreeNode, options: &CanvasOptions) -> String {
         let width = display_width(&label) + 4 + if has_children { 2 } else { 0 };
         let current_idx = list.len();
 
-        list.push(LayoutNode {
-            node: n,
+        list.push(CanvasNodeInfo {
+            id: n.id.clone(),
+            text: n.text.clone(),
             depth,
             label,
             has_children,
+            folded: n.folded,
             marker,
             width,
             x: 0,
@@ -86,7 +114,13 @@ pub fn render_canvas(root: &TreeNode, options: &CanvasOptions) -> String {
     collect(root, 0, None, &mut max_depth, options, &mut layout_nodes);
 
     if layout_nodes.is_empty() {
-        return String::new();
+        return CanvasData {
+            nodes: Vec::new(),
+            width: 0,
+            height: 0,
+            grid: Vec::new(),
+            ascii: options.ascii,
+        };
     }
 
     // Hitung lebar maksimal per level
@@ -144,14 +178,133 @@ pub fn render_canvas(root: &TreeNode, options: &CanvasOptions) -> String {
         put_str(&mut grid, ln.x, ln.y, &box_text);
     }
 
-    // Gabungkan baris ke String
-    grid.into_iter()
-        .map(|row| row.into_iter().collect::<String>().trim_end().to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
+    CanvasData {
+        nodes: layout_nodes,
+        width: total_width,
+        height: total_height,
+        grid,
+        ascii: options.ascii,
+    }
 }
 
-fn assign_y(idx: usize, nodes: &mut [LayoutNode], row_gap: usize, next_row: &mut usize) {
+pub fn find_canvas_neighbor(
+    nodes: &[CanvasNodeInfo],
+    current_idx: usize,
+    dx: isize,
+    dy: isize,
+) -> Option<usize> {
+    if current_idx >= nodes.len() {
+        return None;
+    }
+    let from = &nodes[current_idx];
+
+    // 1. Horizontal Left
+    if dx < 0 {
+        if let Some(pidx) = from.parent_idx {
+            return Some(pidx);
+        }
+        let mut best = None;
+        let mut best_score = usize::MAX;
+        for (i, n) in nodes.iter().enumerate() {
+            if i == current_idx || n.x >= from.x {
+                continue;
+            }
+            let dx_val = from.x - n.x;
+            let dy_val = (from.y as isize - n.y as isize).unsigned_abs();
+            let score = dx_val * 2 + dy_val;
+            if score < best_score {
+                best_score = score;
+                best = Some(i);
+            }
+        }
+        return best;
+    }
+
+    // 2. Horizontal Right
+    if dx > 0 {
+        let mut best_child = None;
+        let mut best_child_dist = usize::MAX;
+        for (i, n) in nodes.iter().enumerate() {
+            if n.parent_idx == Some(current_idx) {
+                let dist = (from.y as isize - n.y as isize).unsigned_abs();
+                if dist < best_child_dist {
+                    best_child_dist = dist;
+                    best_child = Some(i);
+                }
+            }
+        }
+        if let Some(child_idx) = best_child {
+            return Some(child_idx);
+        }
+
+        let mut best = None;
+        let mut best_score = usize::MAX;
+        for (i, n) in nodes.iter().enumerate() {
+            if i == current_idx || n.x <= from.x {
+                continue;
+            }
+            let dx_val = n.x - from.x;
+            let dy_val = (from.y as isize - n.y as isize).unsigned_abs();
+            let score = dx_val * 2 + dy_val;
+            if score < best_score {
+                best_score = score;
+                best = Some(i);
+            }
+        }
+        return best;
+    }
+
+    // 3. Vertical Up / Down
+    if dy != 0 {
+        let is_down = dy > 0;
+        let mut same_col_best = None;
+        let mut same_col_min_dy = usize::MAX;
+        for (i, n) in nodes.iter().enumerate() {
+            if i == current_idx || n.depth != from.depth {
+                continue;
+            }
+            let diff_y = if is_down {
+                n.y as isize - from.y as isize
+            } else {
+                from.y as isize - n.y as isize
+            };
+            if diff_y > 0 && (diff_y as usize) < same_col_min_dy {
+                same_col_min_dy = diff_y as usize;
+                same_col_best = Some(i);
+            }
+        }
+        if let Some(sc) = same_col_best {
+            return Some(sc);
+        }
+
+        let mut cross_best = None;
+        let mut cross_best_score = usize::MAX;
+        for (i, n) in nodes.iter().enumerate() {
+            if i == current_idx {
+                continue;
+            }
+            let diff_y = if is_down {
+                n.y as isize - from.y as isize
+            } else {
+                from.y as isize - n.y as isize
+            };
+            if diff_y <= 0 {
+                continue;
+            }
+            let col_diff = (from.depth as isize - n.depth as isize).unsigned_abs();
+            let score = (diff_y as usize) + col_diff * 20;
+            if score < cross_best_score {
+                cross_best_score = score;
+                cross_best = Some(i);
+            }
+        }
+        return cross_best;
+    }
+
+    None
+}
+
+fn assign_y(idx: usize, nodes: &mut [CanvasNodeInfo], row_gap: usize, next_row: &mut usize) {
     let child_indices: Vec<usize> = nodes
         .iter()
         .enumerate()
@@ -177,17 +330,14 @@ fn assign_y(idx: usize, nodes: &mut [LayoutNode], row_gap: usize, next_row: &mut
 
 fn draw_edge(grid: &mut [Vec<char>], px: usize, py: usize, cx: usize, cy: usize, ascii: bool) {
     if py == cy {
-        // Garis lurus horizontal
         for x in px..cx {
             if x < grid[py].len() {
                 grid[py][x] = if ascii { '-' } else { '─' };
             }
         }
     } else {
-        // Belokan
         let mid_x = px + 2;
         if py < cy {
-            // Anak di bawah
             put_char(grid, mid_x, py, if ascii { '+' } else { '┬' });
             for y in (py + 1)..cy {
                 put_char(grid, mid_x, y, if ascii { '|' } else { '│' });
@@ -197,7 +347,6 @@ fn draw_edge(grid: &mut [Vec<char>], px: usize, py: usize, cx: usize, cy: usize,
                 put_char(grid, x, cy, if ascii { '-' } else { '─' });
             }
         } else {
-            // Anak di atas
             put_char(grid, mid_x, py, if ascii { '+' } else { '┴' });
             for y in (cy + 1)..py {
                 put_char(grid, mid_x, y, if ascii { '|' } else { '│' });
