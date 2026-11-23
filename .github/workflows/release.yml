@@ -21,7 +21,7 @@ jobs:
       - name: Install Compiler & System Dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential libssl-dev libatomic1
+          sudo apt-get install -y build-essential cmake libssl-dev libatomic1
           g++ --version
 
       - name: Install Rust Stable Toolchain
@@ -31,19 +31,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "fmap-rs -> target"
-
-      - name: Download Prebuilt LadybugDB Library
-        run: |
-          cd fmap-rs
-          cargo fetch
-          LBUG_DIR=$(find ~/.cargo/registry/src -name "lbug-*" -type d | head -n1)
-          if [ -d "$LBUG_DIR" ]; then
-            echo "Menyiapkan prebuilt liblbug di $LBUG_DIR..."
-            cd "$LBUG_DIR"
-            LBUG_LIB_KIND=static LBUG_LINUX_VARIANT=compat bash ./scripts/download_lbug.sh
-            mkdir -p .cache/lbug-prebuilt/latest-compat/lib
-            cp -r .cache/lbug-prebuilt/lib/* .cache/lbug-prebuilt/latest-compat/lib/
-          fi
 
       - name: Build Standalone Release Binary
         run: |

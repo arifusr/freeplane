@@ -59,13 +59,11 @@ Untuk membangun binary release `fmap`, host atau runner CI harus memiliki:
 Crate `lbug` adalah binding Rust resmi di atas core engine LadybugDB yang ditulis dalam C++. Ada 2 mode resolusi di build script `lbug` (`build.rs`):
 
 1. **Mode Prebuilt Static Library (Cepat, ~1-2 menit total build)**:
-   * Build script menjalankan helper `scripts/download_lbug.sh` untuk mengunduh arsip pustaka statis `liblbug.a` yang telah dikompilasi oleh tim LadybugDB sesuai arsitektur OS (`linux-x86_64-compat`).
-   * Arsip diletakkan di cache: `.cache/lbug-prebuilt/latest-compat/lib/liblbug.a`.
-   * Rust linker menggabungkan `liblbug.a` langsung ke dalam executable `fmap` (`+whole-archive`).
+   * Build script `lbug` mencoba mengunduh arsip pustaka statis `liblbug.a` sesuai arsitektur OS.
+   * Jika tersedia, library disimpan di cache build Cargo dan dipakai saat linking.
 2. **Mode Fallback dari Source (Lambat, ~15-20 menit)**:
-   * Jika unduhan prebuilt gagal (misalnya karena network timeout), `build.rs` menjalankan `cmake` untuk mengompilasi seluruh source tree C++ (ANTLR4 Cypher grammar, RE2 regex engine, Arrow/Parquet, dsb).
-
-> **Rekomendasi CI/CD**: Jalankan pre-fetch unduhan `liblbug.a` terlebih dahulu agar build CI selesai dalam waktu **< 2 menit** alih-alih mengompilasi seluruh library C++ dari nol.
+   * Jika unduhan prebuilt gagal atau arsip tidak tersedia, `build.rs` melanjutkan build dari source menggunakan `cmake`.
+   * Release workflow mengandalkan fallback bawaan ini; tidak melakukan pre-fetch terpisah yang akan menghentikan job saat unduhan gagal.
 
 ---
 
