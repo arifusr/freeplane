@@ -1,5 +1,100 @@
 import { loadTreeFromGraph } from '../converter/graph-tree.mjs';
-import { renderCanvas, canvasLines, findCanvasNeighbor } from '../formatter/map-canvas.mjs';
+import { renderCanvas, canvasLines, findCanvasNeighbor, displayWidth } from '../formatter/map-canvas.mjs';
+
+// Token ANSI escape sequence atau satu code point (termasuk emoji).
+const ANSI_TOKEN = /\x1b\[[0-9;]*[A-Za-z]|[\s\S]/gu;
+
+function tokenWidth(token) {
+  return token.startsWith('\x1b[') ? 0 : displayWidth(token);
+}
+
+function visibleWidth(text) {
+  let width = 0;
+  for (const token of text.match(ANSI_TOKEN) || []) width += tokenWidth(token);
+  return width;
+}
+
+function truncateAnsi(text, width) {
+  if (visibleWidth(text) <= width) return text;
+
+  let out = '';
+  let used = 0;
+  for (const token of text.match(ANSI_TOKEN) || []) {
+    const charWidth = tokenWidth(token);
+    if (charWidth > 0 && used + charWidth > width - 1) break;
+    out += token;
+    used += charWidth;
+  }
+  return `${out}…\x1b[0m`;
+}
+
+function padAnsi(text, width) {
+  const pad = width - visibleWidth(text);
+  return pad > 0 ? text + ' '.repeat(pad) : text;
+}
+
+function truncatePlain(text, width) {
+  if (displayWidth(text) <= width) return text;
+
+  let out = '';
+  let used = 0;
+  for (const char of text) {
+    const charWidth = displayWidth(char);
+    if (used + charWidth > width - 1) break;
+    out += char;
+    used += charWidth;
+  }
+  return `${out}…`;
+}
+
+// Word-wrap teks biasa (tanpa ANSI) sesuai lebar panel.
+function wrapText(text, width) {
+  const max = Math.max(4, width);
+  const lines = [];
+
+  for (const paragraph of String(text ?? '').split('\n')) {
+    if (!paragraph.trim()) {
+      lines.push('');
+      continue;
+    }
+
+    let line = '';
+    for (const word of paragraph.split(/\s+/)) {
+      if (!word) continue;
+
+      let rest = word;
+      while (displayWidth(rest) > max) {
+        if (line) {
+          lines.push(line);
+          line = '';
+        }
+        let chunk = '';
+        let used = 0;
+        for (const char of rest) {
+          const charWidth = displayWidth(char);
+          if (used + charWidth > max) break;
+          chunk += char;
+          used += charWidth;
+        }
+        if (!chunk) break;
+        lines.push(chunk);
+        rest = rest.slice(chunk.length);
+      }
+      if (!rest) continue;
+
+      const candidate = line ? `${line} ${rest}` : rest;
+      if (displayWidth(candidate) <= max) {
+        line = candidate;
+      } else {
+        if (line) lines.push(line);
+        line = rest;
+      }
+    }
+    if (line) lines.push(line);
+  }
+
+  return lines.length ? lines : [''];
+}
 
 export async function runInteractiveTUI(storage, initialMapId, options = {}) {
   const asciiCanvas = !!options.ascii;
@@ -29,6 +124,12 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
   // Tampilan: 'outliner' (daftar pohon) atau 'canvas' (mindmap 2D ala DOS).
   let viewMode = options.view === 'canvas' ? 'canvas' : 'outliner';
   let panX = 0, panY = 0;
+
+  // Scroll panel info (inspector) kanan.
+  let inspectorScroll = 0;
+  let inspectorNodeId = null;
+  let inspectorPageSize = 1;
+  let inspectorMaxScroll = 0;
 
   const stdout = process.stdout;
   const stdin = process.stdin;
@@ -70,8 +171,20 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
   function render() {
     const cols = stdout.columns || 80;
     const rows = stdout.rows || 24;
-    const leftWidth = Math.floor(cols * 0.58);
-    const rightWidth = cols - leftWidth - 1;
+
+    // Panel kiri (peta/outliner) harus dominan; panel kanan (inspector)
+    // hanya selebar ~28% dengan batas agar tetap terbaca di terminal sempit.
+    const INFO_PANEL_RATIO = 0.28;
+    const INFO_PANEL_MIN = 18;
+    const INFO_PANEL_MAX = 40;
+    const MAP_PANEL_MIN = 30;
+
+    let rightWidth = Math.round(cols * INFO_PANEL_RATIO);
+    rightWidth = Math.min(INFO_PANEL_MAX, Math.max(INFO_PANEL_MIN, rightWidth));
+    if (cols - rightWidth - 1 < MAP_PANEL_MIN) {
+      rightWidth = Math.max(12, cols - MAP_PANEL_MIN - 1);
+    }
+    const leftWidth = cols - rightWidth - 1;
     const contentHeight = Math.max(5, rows - 4); // reserve for header, status, command bar
 
     flatList = getFlattenedVisibleList(root);
@@ -120,7 +233,8 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
           const hasChildren = node.children && node.children.length > 0;
           const foldIcon = hasChildren ? (node.folded ? '[+] ' : '[-] ') : '    ';
           const lineText = `${indent}${foldIcon}${node.text || '(empty)'}`;
-          const truncated = lineText.slice(0, leftWidth - 2).padEnd(leftWidth - 1, ' ');
+          const clippedText = truncatePlain(lineText, Math.max(6, leftWidth - 2));
+          const truncated = clippedText + ' '.repeat(Math.max(0, leftWidth - 1 - visibleWidth(clippedText)));
 
           if (isSelected) {
             paneLines.push(`\x1b[7;36m${truncated}\x1b[0m`);
@@ -137,9 +251,18 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
     const selectedItem = flatList[selectedIndex];
     const sNode = selectedItem ? selectedItem.node : null;
     const inspectorLines = [];
+    const infoWrapWidth = Math.max(8, rightWidth - 3);
+
+    const pushInspectorText = (text, style = '') => {
+      for (const line of wrapText(text, infoWrapWidth)) {
+        inspectorLines.push(style && line ? `${style}${line}\x1b[0m` : line);
+      }
+    };
 
     if (sNode) {
       inspectorLines.push(`\x1b[1;33m📌 Node Details\x1b[0m`);
+      pushInspectorText(sNode.text || '(kosong)', '\x1b[1;37m');
+      inspectorLines.push('');
       inspectorLines.push(`\x1b[90mID:\x1b[0m ${sNode.id}`);
       inspectorLines.push(`\x1b[90mSide:\x1b[0m ${sNode.position || 'root/center'}`);
       inspectorLines.push(`\x1b[90mChildren:\x1b[0m ${sNode.children?.length || 0}`);
@@ -148,10 +271,7 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
       inspectorLines.push('');
       inspectorLines.push(`\x1b[1;33m📝 Catatan / Note:\x1b[0m`);
       if (sNode.note) {
-        const notePreview = sNode.note.split('\n').slice(0, 4);
-        for (const nl of notePreview) {
-          inspectorLines.push(`\x1b[37m${nl.slice(0, rightWidth - 2)}\x1b[0m`);
-        }
+        pushInspectorText(sNode.note, '\x1b[37m');
       } else {
         inspectorLines.push(`\x1b[90m(Tidak ada catatan)\x1b[0m`);
       }
@@ -159,22 +279,39 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
       inspectorLines.push(`\x1b[1;33m🔗 Arrowlinks / Relasi:\x1b[0m`);
       if (sNode.arrowlinks && sNode.arrowlinks.length > 0) {
         for (const al of sNode.arrowlinks) {
-          inspectorLines.push(`──► ${al.target} ${al.label ? `(${al.label})` : ''}`);
+          pushInspectorText(`──► ${al.target} ${al.label ? `(${al.label})` : ''}`);
         }
       } else {
         inspectorLines.push(`\x1b[90m(Tidak ada arrowlink)\x1b[0m`);
       }
     }
 
-    while (inspectorLines.length < contentHeight) {
-      inspectorLines.push('');
+    // Reset scroll saat berpindah node, lalu jepit offset ke rentang valid.
+    if ((sNode?.id || null) !== inspectorNodeId) {
+      inspectorNodeId = sNode?.id || null;
+      inspectorScroll = 0;
+    }
+    const hasInfoOverflow = inspectorLines.length > contentHeight;
+    const infoViewHeight = hasInfoOverflow ? contentHeight - 1 : contentHeight;
+    inspectorPageSize = Math.max(1, infoViewHeight);
+    inspectorMaxScroll = Math.max(0, inspectorLines.length - infoViewHeight);
+    inspectorScroll = Math.max(0, Math.min(inspectorScroll, inspectorMaxScroll));
+
+    const inspectorWindow = inspectorLines.slice(inspectorScroll, inspectorScroll + infoViewHeight);
+    while (inspectorWindow.length < contentHeight) {
+      inspectorWindow.push('');
+    }
+    if (hasInfoOverflow) {
+      const end = Math.min(inspectorLines.length, inspectorScroll + infoViewHeight);
+      const pos = `${inspectorScroll + 1}-${end}/${inspectorLines.length}`;
+      inspectorWindow[contentHeight - 1] = `\x1b[2;33m↕ ${pos} (PgUp/PgDn)\x1b[0m`;
     }
 
     // Combine left and right panes
     for (let i = 0; i < contentHeight; i++) {
       const left = paneLines[i] || ' '.repeat(leftWidth - 1);
-      const right = inspectorLines[i] ? inspectorLines[i].slice(0, rightWidth - 1) : '';
-      buffer.push(`${left}\x1b[90m│\x1b[0m${right}\n`);
+      const right = truncateAnsi(inspectorWindow[i] || '', rightWidth - 1);
+      buffer.push(`${left}\x1b[90m│\x1b[0m${padAnsi(right, rightWidth - 1)}\n`);
     }
 
     // 4. Status Bar (Row rows - 2)
@@ -196,8 +333,8 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
     } else {
       // Normal Mode Hint Bar
       const navHints = viewMode === 'canvas'
-        ? ' [↑↓←→: Navigasi 2D] [Space: Lipat] [v: Outliner] [/]: Command [q]: Keluar'
-        : ' [↑/↓: Nav] [/]: Command (/anak, /edit, /catatan, /peta, /cari) [Tab]: Anak [Enter]: Sibling [v]: Canvas [q]: Keluar';
+        ? ' [↑↓←→: Navigasi 2D] [PgUp/PgDn: Scroll Info] [Space: Lipat] [v: Outliner] [/]: Command [q]: Keluar'
+        : ' [↑/↓: Nav] [PgUp/PgDn: Scroll Info] [/]: Command (/anak, /edit, /catatan, /peta, /cari) [Tab]: Anak [Enter]: Sibling [v]: Canvas [q]: Keluar';
       buffer.push(`\x1b[90;40m${navHints.slice(0, cols - 1).padEnd(cols, ' ')}\x1b[0m`);
     }
 
@@ -582,6 +719,21 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
         return;
       }
 
+      // Scroll panel info: PgUp/PgDn (alias Ctrl+U/Ctrl+D)
+      if (key && (key.name === 'pageup' || (key.ctrl && key.name === 'u') ||
+                  key.name === 'pagedown' || (key.ctrl && key.name === 'd'))) {
+        const isUp = key.name === 'pageup' || (key.ctrl && key.name === 'u');
+        const step = Math.max(1, inspectorPageSize - 2);
+        const nextScroll = isUp
+          ? Math.max(0, inspectorScroll - step)
+          : Math.min(inspectorMaxScroll, inspectorScroll + step);
+        if (nextScroll !== inspectorScroll) {
+          inspectorScroll = nextScroll;
+          render();
+        }
+        return;
+      }
+
       // Navigasi spasial 2D saat mode canvas
       if (viewMode === 'canvas' && key && ['up', 'down', 'left', 'right'].includes(key.name)) {
         const grid = renderCanvas(root, { color: true, ascii: asciiCanvas });
@@ -664,8 +816,12 @@ export async function runInteractiveTUI(storage, initialMapId, options = {}) {
       else if (str === '\x1b[B') key.name = 'down';
       else if (str === '\x1b[C') key.name = 'right';
       else if (str === '\x1b[D') key.name = 'left';
+      else if (str === '\x1b[5~') key.name = 'pageup';
+      else if (str === '\x1b[6~') key.name = 'pagedown';
       else if (str === ' ') key.name = 'space';
       else if (str === '\x03') { key.name = 'c'; key.ctrl = true; }
+      else if (str === '\x15') { key.name = 'u'; key.ctrl = true; }
+      else if (str === '\x04') { key.name = 'd'; key.ctrl = true; }
 
       onKeypress(str, key);
     });

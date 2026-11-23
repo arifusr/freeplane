@@ -9,6 +9,7 @@
 !research/
 !renv-tutorial-id/
 !renv/
+!fmap-rs/
 
 # ============================================================
 # JANGAN PERNAH commit: kredensial / auth / riwayat
@@ -50,6 +51,11 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+*.lbug
+*.lbug/
+*.lbug-*
+fmap-rs/target/
+fmap-rs/bin/
 *.log
 renv/cockpit/dist/
 cli/dist/
