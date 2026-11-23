@@ -89,6 +89,8 @@ fn parse_node_attributes(e: &BytesStart) -> Result<TreeNode> {
         background_color: bg_color,
         style,
         link,
+        created_at: None,
+        updated_at: None,
         children: Vec::new(),
     })
 }

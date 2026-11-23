@@ -261,6 +261,20 @@ fn tui_loop<B: ratatui::backend::Backend>(
                         Style::default().fg(Color::White),
                     ),
                 ]),
+                Line::from(vec![
+                    Span::styled("Dibuat   : ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        selected_node.created_at.as_deref().unwrap_or("(tidak tersedia)"),
+                        Style::default().fg(Color::White),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("Diperbarui: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        selected_node.updated_at.as_deref().unwrap_or("(tidak tersedia)"),
+                        Style::default().fg(Color::White),
+                    ),
+                ]),
                 Line::from(""),
                 Line::from(Span::styled(
                     "─── Isi Lengkap ───",

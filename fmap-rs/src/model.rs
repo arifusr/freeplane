@@ -45,6 +45,10 @@ pub struct TreeNode {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    #[serde(skip)]
+    pub created_at: Option<String>,
+    #[serde(skip)]
+    pub updated_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TreeNode>,
 }
@@ -61,6 +65,8 @@ impl TreeNode {
             background_color: None,
             style: None,
             link: None,
+            created_at: None,
+            updated_at: None,
             children: Vec::new(),
         }
     }

@@ -312,19 +312,21 @@ impl LadybugStorage {
             };
 
             let nodes_q = format!(
-                "MATCH (n:MapNode {{map_id: '{}'}}) RETURN n.id, n.text, n.note, n.position, n.folded",
+                "MATCH (n:MapNode {{map_id: '{}'}}) RETURN n.id, n.text, n.note, n.position, n.folded, n.created_at, n.updated_at",
                 esc_cypher(map_id)
             );
             let mut n_res = conn.query(&nodes_q).context("Gagal query nodes")?;
             let mut node_map: HashMap<String, TreeNode> = HashMap::new();
 
             for row in &mut n_res {
-                if row.len() >= 5 {
+                if row.len() >= 7 {
                     let id = val_to_string(&row[0]);
                     let text = val_to_string(&row[1]);
                     let note = val_to_string(&row[2]);
                     let pos = val_to_string(&row[3]);
                     let folded = val_to_bool(&row[4]);
+                    let created_at = val_to_string(&row[5]);
+                    let updated_at = val_to_string(&row[6]);
 
                     let tree_node = TreeNode {
                         id: id.clone(),
@@ -336,6 +338,8 @@ impl LadybugStorage {
                         background_color: None,
                         style: None,
                         link: None,
+                        created_at: non_empty(created_at),
+                        updated_at: non_empty(updated_at),
                         children: Vec::new(),
                     };
                     node_map.insert(id, tree_node);
@@ -575,6 +579,14 @@ fn touch_map_of_node(conn: &Connection, node_id: &str, now: &str) {
         esc_cypher(now)
     );
     let _ = conn.query(&q);
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn now_string() -> String {
