@@ -18,6 +18,7 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 struct FlatItem<'a> {
@@ -63,6 +64,9 @@ fn tui_loop<B: ratatui::backend::Backend>(
     let mut pan_x: usize = 0;
     let mut pan_y: usize = 0;
 
+    let refresh_interval = Duration::from_millis(500);
+    let mut last_refresh = Instant::now();
+
     let canvas_opts = CanvasOptions {
         max_label: 34,
         level_gap: 6,
@@ -71,6 +75,13 @@ fn tui_loop<B: ratatui::backend::Backend>(
     };
 
     loop {
+        if last_refresh.elapsed() >= refresh_interval {
+            last_refresh = Instant::now();
+            if let Ok(fresh_tree) = storage.load_tree(map_id) {
+                *tree = fresh_tree;
+            }
+        }
+
         let canvas_data = compute_canvas(tree, &canvas_opts);
         let visible_nodes = flatten_visible(tree, 0, None);
 

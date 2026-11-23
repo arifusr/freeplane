@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "fmap",
     author = "arifusr",
-    version = "1.0.0",
+    version = "1.1.0",
     about = "🧠 Freeplane CLI & Graph Engine (LadybugDB Native Rust)"
 )]
 pub struct Cli {
