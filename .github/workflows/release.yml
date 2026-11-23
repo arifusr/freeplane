@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,11 +12,17 @@ permissions:
 jobs:
   build-release:
     name: Build & Release Linux x86_64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install Compiler & System Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential libssl-dev libatomic1
+          g++ --version
 
       - name: Install Rust Stable Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -29,7 +36,6 @@ jobs:
         run: |
           cd fmap-rs
           cargo fetch
-          # Cari direktori crate lbug yang ter-fetch di cargo registry
           LBUG_DIR=$(find ~/.cargo/registry/src -name "lbug-*" -type d | head -n1)
           if [ -d "$LBUG_DIR" ]; then
             echo "Menyiapkan prebuilt liblbug di $LBUG_DIR..."
@@ -44,6 +50,11 @@ jobs:
           cd fmap-rs
           cargo build --release
           strip target/release/fmap
+
+      - name: Smoke Test
+        run: |
+          ./fmap-rs/target/release/fmap --version
+          ./fmap-rs/target/release/fmap --help
 
       - name: Package Release Assets
         run: |
@@ -61,4 +72,3 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-
