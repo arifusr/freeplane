@@ -12,10 +12,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Terminal,
 };
 use std::io;
@@ -28,7 +28,17 @@ struct FlatItem<'a> {
     parent_id: Option<String>,
 }
 
-pub fn run_interactive_tui(storage: &LadybugStorage, map_id: &str, start_canvas: bool) -> Result<()> {
+#[derive(Clone, Debug)]
+enum ArrowPromptAction {
+    Add { source_id: String },
+    Remove { source_id: String },
+}
+
+pub fn run_interactive_tui(
+    storage: &LadybugStorage,
+    map_id: &str,
+    start_canvas: bool,
+) -> Result<()> {
     let mut tree = storage.load_tree(map_id)?;
 
     // Setup terminal
@@ -62,6 +72,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
     let mut is_canvas_mode = start_canvas;
     let mut selected_id = tree.id.clone();
     let mut info_scroll: u16 = 0;
+    let mut link_prompt: Option<(ArrowPromptAction, String)> = None;
     let mut pan_x: usize = 0;
     let mut pan_y: usize = 0;
 
@@ -146,20 +157,16 @@ fn tui_loop<B: ratatui::backend::Backend>(
             let left_block = Block::default()
                 .title(Span::styled(
                     left_title,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray));
 
             if is_canvas_mode {
-                let lines = render_canvas_viewport(
-                    &canvas_data,
-                    Some(&selected_id),
-                    pan_x,
-                    pan_y,
-                    vw,
-                    vh,
-                );
+                let lines =
+                    render_canvas_viewport(&canvas_data, Some(&selected_id), pan_x, pan_y, vw, vh);
                 let p = Paragraph::new(lines).block(left_block);
                 f.render_widget(p, left_chunk);
             } else {
@@ -174,7 +181,11 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     let is_sel = i == selected_idx;
                     let indent = "  ".repeat(it.depth);
                     let fold_marker = if !it.node.children.is_empty() {
-                        if it.node.folded { "[+] " } else { "[-] " }
+                        if it.node.folded {
+                            "[+] "
+                        } else {
+                            "[-] "
+                        }
                     } else {
                         "    "
                     };
@@ -197,7 +208,9 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             Span::styled(
                                 &it.node.text,
                                 if it.depth == 0 {
-                                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                                    Style::default()
+                                        .fg(Color::Yellow)
+                                        .add_modifier(Modifier::BOLD)
                                 } else {
                                     Style::default().fg(Color::White)
                                 },
@@ -217,7 +230,9 @@ fn tui_loop<B: ratatui::backend::Backend>(
             let right_block = Block::default()
                 .title(Span::styled(
                     right_title,
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray));
@@ -231,13 +246,18 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::styled("Teks Utuh: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         &selected_node.text,
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]),
                 Line::from(vec![
                     Span::styled("Catatan  : ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        selected_node.note.as_deref().unwrap_or("(tidak ada catatan)"),
+                        selected_node
+                            .note
+                            .as_deref()
+                            .unwrap_or("(tidak ada catatan)"),
                         Style::default().fg(Color::White),
                     ),
                 ]),
@@ -281,7 +301,10 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     "─── Isi Lengkap ───",
                     Style::default().fg(Color::DarkGray),
                 )),
-                Line::from(Span::styled(&selected_node.text, Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    &selected_node.text,
+                    Style::default().fg(Color::White),
+                )),
             ];
 
             if let Some(ref note) = selected_node.note {
@@ -291,7 +314,53 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Style::default().fg(Color::DarkGray),
                 )));
                 for l in note.lines() {
-                    info_lines.push(Line::from(Span::styled(l, Style::default().fg(Color::Gray))));
+                    info_lines.push(Line::from(Span::styled(
+                        l,
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+            }
+
+            info_lines.push(Line::from(""));
+            info_lines.push(Line::from(Span::styled(
+                format!("─── Arrow keluar ({}) ───", selected_node.arrow_links.len()),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if selected_node.arrow_links.is_empty() {
+                info_lines.push(Line::from(Span::styled(
+                    "(tidak ada)",
+                    Style::default().fg(Color::Gray),
+                )));
+            } else {
+                for target_id in &selected_node.arrow_links {
+                    let target_text = find_node_by_id(tree, target_id)
+                        .map(|node| node.text.as_str())
+                        .unwrap_or("(node tidak ditemukan)");
+                    info_lines.push(Line::from(vec![
+                        Span::styled("→ ", Style::default().fg(Color::Cyan)),
+                        Span::styled(target_id, Style::default().fg(Color::Yellow)),
+                        Span::raw(format!("  {}", target_text)),
+                    ]));
+                }
+            }
+
+            let incoming_links = collect_incoming_arrow_links(tree, &selected_node.id);
+            info_lines.push(Line::from(Span::styled(
+                format!("─── Arrow masuk ({}) ───", incoming_links.len()),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if incoming_links.is_empty() {
+                info_lines.push(Line::from(Span::styled(
+                    "(tidak ada)",
+                    Style::default().fg(Color::Gray),
+                )));
+            } else {
+                for (source_id, source_text) in incoming_links {
+                    info_lines.push(Line::from(vec![
+                        Span::styled("← ", Style::default().fg(Color::Magenta)),
+                        Span::styled(source_id, Style::default().fg(Color::Yellow)),
+                        Span::raw(format!("  {}", source_text)),
+                    ]));
                 }
             }
 
@@ -308,14 +377,25 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::raw(" Keluar  "),
                     Span::styled(" [v] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
                     Span::raw(" Mode Tree  "),
-                    Span::styled(" [←↑↓→ / WASD] ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+                    Span::styled(
+                        " [←↑↓→ / WASD] ",
+                        Style::default().fg(Color::Black).bg(Color::Yellow),
+                    ),
                     Span::raw(" Sorot Node (Highlight)  "),
-                    Span::styled(" [Space] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    Span::styled(
+                        " [Space] ",
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ),
                     Span::raw(" Lipat  "),
-                    Span::styled(" [PgUp/PgDn] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    Span::styled(
+                        " [PgUp/PgDn] ",
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ),
                     Span::raw(" Scroll Info  "),
                     Span::styled(" [0] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
                     Span::raw(" Reset Pan"),
+                    Span::styled(" [r/x] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    Span::raw(" Tambah/Hapus Arrow"),
                 ]
             } else {
                 vec![
@@ -327,10 +407,18 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::raw(" Pilih Node  "),
                     Span::styled(" [←/→] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
                     Span::raw(" Induk/Anak  "),
-                    Span::styled(" [Space] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    Span::styled(
+                        " [Space] ",
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ),
                     Span::raw(" Lipat  "),
-                    Span::styled(" [PgUp/PgDn] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-                    Span::raw(" Scroll Info"),
+                    Span::styled(
+                        " [PgUp/PgDn] ",
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ),
+                    Span::raw(" Scroll Info  "),
+                    Span::styled(" [r/x] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    Span::raw(" Tambah/Hapus Arrow"),
                 ]
             };
 
@@ -339,10 +427,78 @@ fn tui_loop<B: ratatui::backend::Backend>(
                 .border_style(Style::default().fg(Color::DarkGray));
             let help_p = Paragraph::new(Line::from(help_text)).block(help_block);
             f.render_widget(help_p, chunks[1]);
+
+            if let Some((action, input)) = &link_prompt {
+                let area = centered_rect(60, 20, f.area());
+                f.render_widget(Clear, area);
+                let action_text = match action {
+                    ArrowPromptAction::Add { source_id } => {
+                        format!("Dari [{}], ID target arrow link baru:", source_id)
+                    }
+                    ArrowPromptAction::Remove { source_id } => {
+                        format!("Dari [{}], ID target arrow link yang dihapus:", source_id)
+                    }
+                };
+                let prompt = Paragraph::new(vec![
+                    Line::from(action_text),
+                    Line::from(input.as_str()),
+                    Line::from("Enter: konfirmasi | Esc: batal"),
+                ])
+                .block(
+                    Block::default()
+                        .title(" Arrow Link ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                );
+                f.render_widget(prompt, area);
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                let mut prompt_handled = false;
+                let mut submitted_target = None;
+                if link_prompt.is_some() {
+                    prompt_handled = true;
+                    if let Some((_, input)) = link_prompt.as_mut() {
+                        match key.code {
+                            KeyCode::Esc => link_prompt = None,
+                            KeyCode::Enter => submitted_target = Some(input.clone()),
+                            KeyCode::Backspace => {
+                                input.pop();
+                            }
+                            KeyCode::Char(ch) => input.push(ch),
+                            _ => {}
+                        }
+                    }
+                    if let Some(target_id) = submitted_target {
+                        if let Some((action, _)) = link_prompt.take() {
+                            if !target_id.trim().is_empty() {
+                                match action {
+                                    ArrowPromptAction::Add { source_id } => {
+                                        storage.add_arrow_link(
+                                            map_id,
+                                            &source_id,
+                                            target_id.trim(),
+                                        )?;
+                                    }
+                                    ArrowPromptAction::Remove { source_id } => {
+                                        storage.remove_arrow_link(
+                                            map_id,
+                                            &source_id,
+                                            target_id.trim(),
+                                        )?;
+                                    }
+                                }
+                                *tree = storage.load_tree(map_id)?;
+                                info_scroll = 0;
+                            }
+                        }
+                    }
+                }
+                if prompt_handled {
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('v') => {
@@ -351,6 +507,22 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char('0') => {
                         pan_x = 0;
                         pan_y = 0;
+                    }
+                    KeyCode::Char('r') => {
+                        link_prompt = Some((
+                            ArrowPromptAction::Add {
+                                source_id: selected_id.clone(),
+                            },
+                            String::new(),
+                        ));
+                    }
+                    KeyCode::Char('x') => {
+                        link_prompt = Some((
+                            ArrowPromptAction::Remove {
+                                source_id: selected_id.clone(),
+                            },
+                            String::new(),
+                        ));
                     }
                     KeyCode::Char(' ') => {
                         if let Some(new_folded) = toggle_fold(tree, &selected_id) {
@@ -366,8 +538,12 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
-                            if let Some(curr_idx) = cdata.nodes.iter().position(|n| n.id == selected_id) {
-                                if let Some(next_idx) = find_canvas_neighbor(&cdata.nodes, curr_idx, -1, 0) {
+                            if let Some(curr_idx) =
+                                cdata.nodes.iter().position(|n| n.id == selected_id)
+                            {
+                                if let Some(next_idx) =
+                                    find_canvas_neighbor(&cdata.nodes, curr_idx, -1, 0)
+                                {
                                     selected_id = cdata.nodes[next_idx].id.clone();
                                     info_scroll = 0;
                                 }
@@ -389,8 +565,12 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
-                            if let Some(curr_idx) = cdata.nodes.iter().position(|n| n.id == selected_id) {
-                                if let Some(next_idx) = find_canvas_neighbor(&cdata.nodes, curr_idx, 1, 0) {
+                            if let Some(curr_idx) =
+                                cdata.nodes.iter().position(|n| n.id == selected_id)
+                            {
+                                if let Some(next_idx) =
+                                    find_canvas_neighbor(&cdata.nodes, curr_idx, 1, 0)
+                                {
                                     selected_id = cdata.nodes[next_idx].id.clone();
                                     info_scroll = 0;
                                 }
@@ -412,15 +592,21 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
-                            if let Some(curr_idx) = cdata.nodes.iter().position(|n| n.id == selected_id) {
-                                if let Some(next_idx) = find_canvas_neighbor(&cdata.nodes, curr_idx, 0, -1) {
+                            if let Some(curr_idx) =
+                                cdata.nodes.iter().position(|n| n.id == selected_id)
+                            {
+                                if let Some(next_idx) =
+                                    find_canvas_neighbor(&cdata.nodes, curr_idx, 0, -1)
+                                {
                                     selected_id = cdata.nodes[next_idx].id.clone();
                                     info_scroll = 0;
                                 }
                             }
                         } else {
                             let vnodes = flatten_visible(tree, 0, None);
-                            if let Some(curr_idx) = vnodes.iter().position(|it| it.node.id == selected_id) {
+                            if let Some(curr_idx) =
+                                vnodes.iter().position(|it| it.node.id == selected_id)
+                            {
                                 if curr_idx > 0 {
                                     selected_id = vnodes[curr_idx - 1].node.id.clone();
                                     info_scroll = 0;
@@ -431,15 +617,21 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
-                            if let Some(curr_idx) = cdata.nodes.iter().position(|n| n.id == selected_id) {
-                                if let Some(next_idx) = find_canvas_neighbor(&cdata.nodes, curr_idx, 0, 1) {
+                            if let Some(curr_idx) =
+                                cdata.nodes.iter().position(|n| n.id == selected_id)
+                            {
+                                if let Some(next_idx) =
+                                    find_canvas_neighbor(&cdata.nodes, curr_idx, 0, 1)
+                                {
                                     selected_id = cdata.nodes[next_idx].id.clone();
                                     info_scroll = 0;
                                 }
                             }
                         } else {
                             let vnodes = flatten_visible(tree, 0, None);
-                            if let Some(curr_idx) = vnodes.iter().position(|it| it.node.id == selected_id) {
+                            if let Some(curr_idx) =
+                                vnodes.iter().position(|it| it.node.id == selected_id)
+                            {
                                 if curr_idx + 1 < vnodes.len() {
                                     selected_id = vnodes[curr_idx + 1].node.id.clone();
                                     info_scroll = 0;
@@ -454,6 +646,51 @@ fn tui_loop<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
+fn collect_incoming_arrow_links<'a>(
+    node: &'a TreeNode,
+    target_id: &str,
+) -> Vec<(&'a str, &'a str)> {
+    let mut incoming = Vec::new();
+    collect_incoming_arrow_links_into(node, target_id, &mut incoming);
+    incoming
+}
+
+fn collect_incoming_arrow_links_into<'a>(
+    node: &'a TreeNode,
+    target_id: &str,
+    incoming: &mut Vec<(&'a str, &'a str)>,
+) {
+    if node
+        .arrow_links
+        .iter()
+        .any(|destination| destination == target_id)
+    {
+        incoming.push((&node.id, &node.text));
+    }
+    for child in &node.children {
+        collect_incoming_arrow_links_into(child, target_id, incoming);
+    }
 }
 
 fn format_local_timestamp(timestamp: Option<&str>) -> String {
@@ -554,7 +791,19 @@ fn render_canvas_viewport(
 fn is_box_drawing_char(ch: char) -> bool {
     matches!(
         ch,
-        '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '+' | '|' | '-'
+        '─' | '│'
+            | '┌'
+            | '┐'
+            | '└'
+            | '┘'
+            | '├'
+            | '┤'
+            | '┬'
+            | '┴'
+            | '┼'
+            | '+'
+            | '|'
+            | '-'
     )
 }
 
@@ -602,4 +851,23 @@ fn toggle_fold(node: &mut TreeNode, target_id: &str) -> Option<bool> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incoming_arrow_links_include_nested_sources() {
+        let mut root = TreeNode::new("root", "Root");
+        let mut source = TreeNode::new("source", "Source");
+        source.arrow_links.push("target".to_string());
+        root.children.push(source);
+        root.children.push(TreeNode::new("target", "Target"));
+
+        assert_eq!(
+            collect_incoming_arrow_links(&root, "target"),
+            vec![("source", "Source")]
+        );
+    }
 }

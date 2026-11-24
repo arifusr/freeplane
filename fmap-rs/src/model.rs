@@ -45,6 +45,8 @@ pub struct TreeNode {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrow_links: Vec<String>,
     #[serde(skip)]
     pub created_at: Option<String>,
     #[serde(skip)]
@@ -65,6 +67,7 @@ impl TreeNode {
             background_color: None,
             style: None,
             link: None,
+            arrow_links: Vec::new(),
             created_at: None,
             updated_at: None,
             children: Vec::new(),
@@ -75,4 +78,3 @@ impl TreeNode {
         1 + self.children.iter().map(|c| c.count_nodes()).sum::<usize>()
     }
 }
-

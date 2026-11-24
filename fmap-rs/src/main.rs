@@ -7,12 +7,12 @@ pub mod tui;
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use cli::{Cli, Commands, MapCommands, NodeCommands};
+use cli::{Cli, Commands, LinkCommands, MapCommands, NodeCommands};
 use formatter::{format_outliner_tree, render_canvas, CanvasOptions, TreeViewOptions};
 use parser::{parse_mm, serialize_mm};
-use storage::LadybugStorage;
 use std::fs;
 use std::path::Path;
+use storage::LadybugStorage;
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -29,11 +29,16 @@ fn main() -> Result<()> {
             }
 
             if maps.is_empty() {
-                println!("\nBelum ada peta di database LadybugDB. Gunakan: fmap map import <file.mm>");
+                println!(
+                    "\nBelum ada peta di database LadybugDB. Gunakan: fmap map import <file.mm>"
+                );
                 return Ok(());
             }
 
-            println!("\n📋 Daftar Peta ({} peta tersimpan di LadybugDB):", maps.len());
+            println!(
+                "\n📋 Daftar Peta ({} peta tersimpan di LadybugDB):",
+                maps.len()
+            );
             println!("{}", "─".repeat(60));
             for m in maps {
                 println!(
@@ -64,9 +69,18 @@ fn main() -> Result<()> {
             println!("  Judul     : \x1b[1;36m{}\x1b[0m", title);
             println!("  Root Node : [{}] \"{}\"", root_id, root_text);
             println!("\nLangkah selanjutnya:");
-            println!("• Buka di TUI interaktif : \x1b[33mfmap ui {}\x1b[0m", map_id);
-            println!("• Tambah cabang via CLI  : \x1b[33mfmap node add {} {} \"Cabang Pertama\"\x1b[0m", map_id, root_id);
-            println!("• Tampilkan pohon        : \x1b[33mfmap view {}\x1b[0m\n", map_id);
+            println!(
+                "• Buka di TUI interaktif : \x1b[33mfmap ui {}\x1b[0m",
+                map_id
+            );
+            println!(
+                "• Tambah cabang via CLI  : \x1b[33mfmap node add {} {} \"Cabang Pertama\"\x1b[0m",
+                map_id, root_id
+            );
+            println!(
+                "• Tampilkan pohon        : \x1b[33mfmap view {}\x1b[0m\n",
+                map_id
+            );
         }
 
         Commands::Map(MapCommands::Import { file, title }) => {
@@ -120,17 +134,26 @@ fn main() -> Result<()> {
             } else {
                 let xml = serialize_mm(&tree);
                 fs::write(&output, xml)?;
-                println!("\x1b[32m✔ Berhasil diekspor ke FreeMind XML (.mm):\x1b[0m {}", output);
+                println!(
+                    "\x1b[32m✔ Berhasil diekspor ke FreeMind XML (.mm):\x1b[0m {}",
+                    output
+                );
             }
         }
 
         Commands::Map(MapCommands::Delete { map_id }) => {
             storage.delete_map(&map_id)?;
             if args.json {
-                println!("{}", serde_json::json!({ "success": true, "mapId": map_id }));
+                println!(
+                    "{}",
+                    serde_json::json!({ "success": true, "mapId": map_id })
+                );
                 return Ok(());
             }
-            println!("\x1b[32m✔ Peta {} berhasil dihapus dari LadybugDB.\x1b[0m", map_id);
+            println!(
+                "\x1b[32m✔ Peta {} berhasil dihapus dari LadybugDB.\x1b[0m",
+                map_id
+            );
         }
 
         Commands::View { map_id, depth } => {
@@ -171,10 +194,17 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            println!("\n🔍 Hasil Pencarian untuk \"{}\" ({} ditemukan):", query, results.len());
+            println!(
+                "\n🔍 Hasil Pencarian untuk \"{}\" ({} ditemukan):",
+                query,
+                results.len()
+            );
             println!("{}", "─".repeat(60));
             for n in results {
-                println!("• [{}] (Peta: {}) \x1b[1;36m{}\x1b[0m", n.id, n.map_id, n.text);
+                println!(
+                    "• [{}] (Peta: {}) \x1b[1;36m{}\x1b[0m",
+                    n.id, n.map_id, n.text
+                );
                 if let Some(note) = n.note {
                     println!("    Catatan: {}", note);
                 }
@@ -196,10 +226,16 @@ fn main() -> Result<()> {
             }
 
             if let Some(path) = path_opt {
-                println!("\n\x1b[32m✔ Jalur penalaran terpendek ditemukan ({} hops):\x1b[0m", path.len().saturating_sub(1));
+                println!(
+                    "\n\x1b[32m✔ Jalur penalaran terpendek ditemukan ({} hops):\x1b[0m",
+                    path.len().saturating_sub(1)
+                );
                 println!("  {}\n", path.join(" -> "));
             } else {
-                println!("\n❌ Tidak ditemukan jalur antara {} dan {}.\n", node_a, node_b);
+                println!(
+                    "\n❌ Tidak ditemukan jalur antara {} dan {}.\n",
+                    node_a, node_b
+                );
             }
         }
 
@@ -208,7 +244,11 @@ fn main() -> Result<()> {
             println!("\n📊 Hasil Kueri Cypher:\n{}\n", res);
         }
 
-        Commands::Node(NodeCommands::Add { map_id, parent_id, text }) => {
+        Commands::Node(NodeCommands::Add {
+            map_id,
+            parent_id,
+            text,
+        }) => {
             let new_id = storage.add_node(&map_id, &parent_id, &text)?;
             if args.json {
                 let out = serde_json::json!({
@@ -221,10 +261,17 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&out)?);
                 return Ok(());
             }
-            println!("\x1b[32m✔ Cabang baru berhasil dibuat!\x1b[0m ID: {}", new_id);
+            println!(
+                "\x1b[32m✔ Cabang baru berhasil dibuat!\x1b[0m ID: {}",
+                new_id
+            );
         }
 
-        Commands::Node(NodeCommands::Edit { map_id, node_id, text }) => {
+        Commands::Node(NodeCommands::Edit {
+            map_id,
+            node_id,
+            text,
+        }) => {
             storage.edit_node(&node_id, &text)?;
             if args.json {
                 let out = serde_json::json!({
@@ -251,6 +298,54 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             println!("\x1b[32m✔ Cabang {} dihapus.\x1b[0m", node_id);
+        }
+
+        Commands::Link(LinkCommands::Add {
+            map_id,
+            source_id,
+            target_id,
+        }) => {
+            storage.add_arrow_link(&map_id, &source_id, &target_id)?;
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "success": true,
+                        "mapId": map_id,
+                        "sourceId": source_id,
+                        "targetId": target_id
+                    })
+                );
+                return Ok(());
+            }
+            println!(
+                "\x1b[32m✔ Arrow link dibuat:\x1b[0m {} -> {}",
+                source_id, target_id
+            );
+        }
+
+        Commands::Link(LinkCommands::Rm {
+            map_id,
+            source_id,
+            target_id,
+        }) => {
+            storage.remove_arrow_link(&map_id, &source_id, &target_id)?;
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "success": true,
+                        "mapId": map_id,
+                        "sourceId": source_id,
+                        "targetId": target_id
+                    })
+                );
+                return Ok(());
+            }
+            println!(
+                "\x1b[32m✔ Arrow link dihapus:\x1b[0m {} -> {}",
+                source_id, target_id
+            );
         }
     }
 

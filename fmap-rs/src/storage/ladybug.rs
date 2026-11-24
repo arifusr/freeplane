@@ -66,6 +66,11 @@ impl LadybugStorage {
             esc_cypher(map_id)
         );
         let _ = conn.query(&rel_q);
+        let arrow_rel_q = format!(
+            "MATCH (a:MapNode)-[r:CONNECTS_TO]->(b:MapNode) WHERE a.map_id = '{}' DELETE r",
+            esc_cypher(map_id)
+        );
+        let _ = conn.query(&arrow_rel_q);
 
         let node_q = format!(
             "MATCH (n:MapNode {{map_id: '{}'}}) DELETE n",
@@ -281,6 +286,8 @@ impl LadybugStorage {
             let now = now_string();
             let rel_q = format!("MATCH (a:MapNode)-[r:PARENT_OF]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", esc_cypher(node_id), esc_cypher(node_id));
             let _ = conn.query(&rel_q);
+            let arrow_rel_q = format!("MATCH (a:MapNode)-[r:CONNECTS_TO]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", esc_cypher(node_id), esc_cypher(node_id));
+            let _ = conn.query(&arrow_rel_q);
 
             touch_map_of_node(conn, node_id, &now);
 
@@ -338,6 +345,7 @@ impl LadybugStorage {
                         background_color: None,
                         style: None,
                         link: None,
+                        arrow_links: Vec::new(),
                         created_at: non_empty(created_at),
                         updated_at: non_empty(updated_at),
                         children: Vec::new(),
@@ -359,6 +367,24 @@ impl LadybugStorage {
                     let p_id = val_to_string(&row[0]);
                     let c_id = val_to_string(&row[1]);
                     parent_to_children.entry(p_id).or_default().push(c_id);
+                }
+            }
+
+            let arrow_edges_q = format!(
+                "MATCH (s:MapNode {{map_id: '{}'}})-[r:CONNECTS_TO]->(t:MapNode {{map_id: '{}'}}) RETURN s.id, t.id",
+                esc_cypher(map_id),
+                esc_cypher(map_id)
+            );
+            let mut arrow_res = conn
+                .query(&arrow_edges_q)
+                .context("Gagal query arrow links")?;
+            for row in &mut arrow_res {
+                if row.len() >= 2 {
+                    let source_id = val_to_string(&row[0]);
+                    let target_id = val_to_string(&row[1]);
+                    if let Some(source) = node_map.get_mut(&source_id) {
+                        source.arrow_links.push(target_id);
+                    }
                 }
             }
 
@@ -392,12 +418,11 @@ impl LadybugStorage {
         self.with_conn(|conn| {
             let now = now_string();
 
-            let _ = Self::delete_map_with_conn(conn, map_id);
-
             // Periksa apakah ID root sudah ada di peta lain untuk menghindari konflik primary key
             let check_q = format!(
-                "MATCH (n:MapNode {{id: '{}'}}) RETURN n.id",
-                esc_cypher(&root.id)
+                "MATCH (n:MapNode {{id: '{}'}}) WHERE n.map_id <> '{}' RETURN n.id",
+                esc_cypher(&root.id),
+                esc_cypher(map_id)
             );
             let needs_remap = if let Ok(mut r) = conn.query(&check_q) {
                 r.next().is_some()
@@ -407,14 +432,63 @@ impl LadybugStorage {
 
             let mut processed_tree = root.clone();
             if needs_remap {
-                fn remap_ids(node: &mut TreeNode, map_id: &str) {
-                    node.id = format!("{}_{}", map_id, node.id);
-                    for child in &mut node.children {
-                        remap_ids(child, map_id);
+                fn collect_remapped_ids(
+                    node: &TreeNode,
+                    map_id: &str,
+                    id_map: &mut HashMap<String, String>,
+                ) {
+                    id_map.insert(node.id.clone(), format!("{}_{}", map_id, node.id));
+                    for child in &node.children {
+                        collect_remapped_ids(child, map_id, id_map);
                     }
                 }
-                remap_ids(&mut processed_tree, map_id);
+                fn apply_remapped_ids(node: &mut TreeNode, id_map: &HashMap<String, String>) {
+                    if let Some(new_id) = id_map.get(&node.id) {
+                        node.id = new_id.clone();
+                    }
+                    for target_id in &mut node.arrow_links {
+                        if let Some(new_id) = id_map.get(target_id) {
+                            *target_id = new_id.clone();
+                        }
+                    }
+                    for child in &mut node.children {
+                        apply_remapped_ids(child, id_map);
+                    }
+                }
+                let mut id_map = HashMap::new();
+                collect_remapped_ids(&processed_tree, map_id, &mut id_map);
+                apply_remapped_ids(&mut processed_tree, &id_map);
             }
+
+            fn collect_node_ids(node: &TreeNode, ids: &mut std::collections::HashSet<String>) {
+                ids.insert(node.id.clone());
+                for child in &node.children {
+                    collect_node_ids(child, ids);
+                }
+            }
+            fn validate_arrow_targets(
+                node: &TreeNode,
+                ids: &std::collections::HashSet<String>,
+            ) -> Result<()> {
+                for target_id in &node.arrow_links {
+                    if !ids.contains(target_id) {
+                        return Err(anyhow!(
+                            "Arrow link dari node '{}' mengarah ke node '{}' yang tidak ada di peta",
+                            node.id,
+                            target_id
+                        ));
+                    }
+                }
+                for child in &node.children {
+                    validate_arrow_targets(child, ids)?;
+                }
+                Ok(())
+            }
+            let mut node_ids = std::collections::HashSet::new();
+            collect_node_ids(&processed_tree, &mut node_ids);
+            validate_arrow_targets(&processed_tree, &node_ids)?;
+
+            let _ = Self::delete_map_with_conn(conn, map_id);
 
             let map_q = format!(
                 "CREATE (:MindMap {{id: '{}', title: '{}', root_id: '{}', created_at: '{}', updated_at: '{}'}})",
@@ -462,7 +536,108 @@ impl LadybugStorage {
                 Ok(())
             }
 
+            fn insert_arrow_links(conn: &Connection, map_id: &str, node: &TreeNode) -> Result<()> {
+                for target_id in &node.arrow_links {
+                    let q = format!(
+                        "MATCH (s:MapNode {{id: '{}', map_id: '{}'}}), (t:MapNode {{id: '{}', map_id: '{}'}}) CREATE (s)-[:CONNECTS_TO]->(t)",
+                        esc_cypher(&node.id),
+                        esc_cypher(map_id),
+                        esc_cypher(target_id),
+                        esc_cypher(map_id)
+                    );
+                    conn.query(&q).context("Gagal menyimpan arrow link")?;
+                }
+                for child in &node.children {
+                    insert_arrow_links(conn, map_id, child)?;
+                }
+                Ok(())
+            }
+
             insert_recursive(conn, map_id, None, &processed_tree, &now)?;
+            insert_arrow_links(conn, map_id, &processed_tree)?;
+            Ok(())
+        })
+    }
+
+    pub fn add_arrow_link(&self, map_id: &str, source_id: &str, target_id: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            let validate_q = format!(
+                "MATCH (s:MapNode {{id: '{}', map_id: '{}'}}), (t:MapNode {{id: '{}', map_id: '{}'}}) RETURN count(*)",
+                esc_cypher(source_id),
+                esc_cypher(map_id),
+                esc_cypher(target_id),
+                esc_cypher(map_id)
+            );
+            let mut res = conn.query(&validate_q).context("Gagal memvalidasi node arrow link")?;
+            let count = res.next().and_then(|row| row.get(0).map(val_to_i64)).unwrap_or(0);
+            if count == 0 {
+                return Err(anyhow!(
+                    "Node sumber '{}' atau target '{}' tidak ditemukan di peta '{}'",
+                    source_id,
+                    target_id,
+                    map_id
+                ));
+            }
+
+            let exists_q = format!(
+                "MATCH (s:MapNode {{id: '{}', map_id: '{}'}})-[r:CONNECTS_TO]->(t:MapNode {{id: '{}', map_id: '{}'}}) RETURN count(r)",
+                esc_cypher(source_id),
+                esc_cypher(map_id),
+                esc_cypher(target_id),
+                esc_cypher(map_id)
+            );
+            let mut exists_res = conn.query(&exists_q).context("Gagal memeriksa arrow link")?;
+            let exists = exists_res
+                .next()
+                .and_then(|row| row.get(0).map(val_to_i64))
+                .unwrap_or(0);
+            if exists == 0 {
+                let create_q = format!(
+                    "MATCH (s:MapNode {{id: '{}', map_id: '{}'}}), (t:MapNode {{id: '{}', map_id: '{}'}}) CREATE (s)-[:CONNECTS_TO]->(t)",
+                    esc_cypher(source_id),
+                    esc_cypher(map_id),
+                    esc_cypher(target_id),
+                    esc_cypher(map_id)
+                );
+                conn.query(&create_q).context("Gagal membuat arrow link")?;
+            }
+
+            let now = now_string();
+            touch_map(conn, map_id, &now)?;
+            Ok(())
+        })
+    }
+
+    pub fn remove_arrow_link(&self, map_id: &str, source_id: &str, target_id: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            let validate_q = format!(
+                "MATCH (s:MapNode {{id: '{}', map_id: '{}'}}), (t:MapNode {{id: '{}', map_id: '{}'}}) RETURN count(*)",
+                esc_cypher(source_id),
+                esc_cypher(map_id),
+                esc_cypher(target_id),
+                esc_cypher(map_id)
+            );
+            let mut res = conn.query(&validate_q).context("Gagal memvalidasi node arrow link")?;
+            let count = res.next().and_then(|row| row.get(0).map(val_to_i64)).unwrap_or(0);
+            if count == 0 {
+                return Err(anyhow!(
+                    "Node sumber '{}' atau target '{}' tidak ditemukan di peta '{}'",
+                    source_id,
+                    target_id,
+                    map_id
+                ));
+            }
+
+            let delete_q = format!(
+                "MATCH (s:MapNode {{id: '{}', map_id: '{}'}})-[r:CONNECTS_TO]->(t:MapNode {{id: '{}', map_id: '{}'}}) DELETE r",
+                esc_cypher(source_id),
+                esc_cypher(map_id),
+                esc_cypher(target_id),
+                esc_cypher(map_id)
+            );
+            conn.query(&delete_q).context("Gagal menghapus arrow link")?;
+            let now = now_string();
+            touch_map(conn, map_id, &now)?;
             Ok(())
         })
     }
@@ -579,6 +754,16 @@ fn touch_map_of_node(conn: &Connection, node_id: &str, now: &str) {
         esc_cypher(now)
     );
     let _ = conn.query(&q);
+}
+
+fn touch_map(conn: &Connection, map_id: &str, now: &str) -> Result<()> {
+    let query = format!(
+        "MATCH (m:MindMap {{id: '{}'}}) SET m.updated_at = '{}'",
+        esc_cypher(map_id),
+        esc_cypher(now)
+    );
+    conn.query(&query).context("Gagal memperbarui waktu peta")?;
+    Ok(())
 }
 
 fn non_empty(value: String) -> Option<String> {

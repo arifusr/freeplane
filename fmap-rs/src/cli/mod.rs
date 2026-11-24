@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "fmap",
     author = "arifusr",
-    version = "1.1.0",
+    version,
     about = "🧠 Freeplane CLI & Graph Engine (LadybugDB Native Rust)"
 )]
 pub struct Cli {
@@ -20,7 +20,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    #[command(subcommand, about = "Kelola mindmap (list, create, import, export, delete)")]
+    #[command(
+        subcommand,
+        about = "Kelola mindmap (list, create, import, export, delete)"
+    )]
     Map(MapCommands),
 
     #[command(about = "Tampilkan pohon hierarki (Outliner) di terminal")]
@@ -52,18 +55,16 @@ pub enum Commands {
     },
 
     #[command(about = "Cari jalur koneksi terpendek antara dua node")]
-    Path {
-        node_a: String,
-        node_b: String,
-    },
+    Path { node_a: String, node_b: String },
 
     #[command(about = "Jalankan kueri graf Cypher")]
-    Cypher {
-        query: String,
-    },
+    Cypher { query: String },
 
     #[command(subcommand, about = "Mutasi node (add, edit, rm)")]
     Node(NodeCommands),
+
+    #[command(subcommand, about = "Kelola arrow link antar-node")]
+    Link(LinkCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -93,9 +94,7 @@ pub enum MapCommands {
     },
 
     #[command(about = "Hapus peta dari database")]
-    Delete {
-        map_id: String,
-    },
+    Delete { map_id: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -115,9 +114,22 @@ pub enum NodeCommands {
     },
 
     #[command(about = "Hapus cabang")]
-    Rm {
-        map_id: String,
-        node_id: String,
-    },
+    Rm { map_id: String, node_id: String },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum LinkCommands {
+    #[command(about = "Buat arrow link dari node sumber ke target")]
+    Add {
+        map_id: String,
+        source_id: String,
+        target_id: String,
+    },
+
+    #[command(about = "Hapus arrow link dari node sumber ke target")]
+    Rm {
+        map_id: String,
+        source_id: String,
+        target_id: String,
+    },
+}

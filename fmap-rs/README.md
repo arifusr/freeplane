@@ -85,5 +85,16 @@ Binary executable akan berada di `./target/release/fmap`.
 
 # Pencarian teks node
 ./target/release/fmap search "kata_kunci"
+
+# Buat arrow link terarah dari satu node ke node lain
+./target/release/fmap link add <map_id> <source_node_id> <target_node_id>
+
+# Hapus arrow link terarah
+./target/release/fmap link rm <map_id> <source_node_id> <target_node_id>
 ```
+
+Arrow link dari format FreeMind/Freeplane `.mm` ikut diimpor dan diekspor. Di TUI,
+panel info menampilkan arrow link keluar dan masuk untuk node terpilih. Tekan `r`
+untuk membuat link dari node terpilih (masukkan ID target), atau `x` untuk
+menghapus link keluar ke ID target tersebut.
 

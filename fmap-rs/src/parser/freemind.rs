@@ -37,6 +37,20 @@ pub fn parse_mm(xml: &str) -> Result<TreeNode> {
             Ok(Event::Empty(ref e)) if e.name().as_ref() == b"richcontent" => {
                 // Ignore or handle
             }
+            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"arrowlink" => {
+                if let Some(node) = node_stack.last_mut() {
+                    if let Some(destination) = parse_arrow_destination(e)? {
+                        node.arrow_links.push(destination);
+                    }
+                }
+            }
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"arrowlink" => {
+                if let Some(node) = node_stack.last_mut() {
+                    if let Some(destination) = parse_arrow_destination(e)? {
+                        node.arrow_links.push(destination);
+                    }
+                }
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(anyhow!("Gagal parsing XML FreeMind: {:?}", e)),
             _ => {}
@@ -45,6 +59,16 @@ pub fn parse_mm(xml: &str) -> Result<TreeNode> {
     }
 
     root_node.ok_or_else(|| anyhow!("Tidak ditemukan elemen <node> dalam XML FreeMind"))
+}
+
+fn parse_arrow_destination(e: &BytesStart) -> Result<Option<String>> {
+    for attr in e.attributes() {
+        let attr = attr?;
+        if attr.key.as_ref() == b"DESTINATION" {
+            return Ok(Some(attr.unescape_value()?.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn parse_node_attributes(e: &BytesStart) -> Result<TreeNode> {
@@ -76,7 +100,11 @@ fn parse_node_attributes(e: &BytesStart) -> Result<TreeNode> {
     }
 
     if id.is_empty() {
-        id = format!("ID_{}_{}", chrono::Utc::now().timestamp_millis(), fastrand());
+        id = format!(
+            "ID_{}_{}",
+            chrono::Utc::now().timestamp_millis(),
+            fastrand()
+        );
     }
 
     Ok(TreeNode {
@@ -89,6 +117,7 @@ fn parse_node_attributes(e: &BytesStart) -> Result<TreeNode> {
         background_color: bg_color,
         style,
         link,
+        arrow_links: Vec::new(),
         created_at: None,
         updated_at: None,
         children: Vec::new(),
@@ -97,7 +126,11 @@ fn parse_node_attributes(e: &BytesStart) -> Result<TreeNode> {
 
 fn fastrand() -> u32 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() % 10000) as u32
+    (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        % 10000) as u32
 }
 
 pub fn serialize_mm(root: &TreeNode) -> String {
@@ -135,10 +168,17 @@ fn serialize_node_xml(node: &TreeNode, depth: usize, out: &mut String) {
         out.push_str(&format!(" LINK=\"{}\"", escape_xml(l)));
     }
 
-    if node.children.is_empty() {
+    if node.children.is_empty() && node.arrow_links.is_empty() {
         out.push_str("/>\n");
     } else {
         out.push_str(">\n");
+        for destination in &node.arrow_links {
+            out.push_str(&format!(
+                "{}<arrowlink DESTINATION=\"{}\"/>\n",
+                "\t".repeat(depth + 1),
+                escape_xml(destination)
+            ));
+        }
         for child in &node.children {
             serialize_node_xml(child, depth + 1, out);
         }
@@ -175,5 +215,16 @@ mod tests {
         assert_eq!(parsed.children.len(), 1);
         assert_eq!(parsed.children[0].text, "Child One");
     }
-}
 
+    #[test]
+    fn test_arrowlink_roundtrip() {
+        let xml = r#"<map><node ID="root" TEXT="Root"><arrowlink DESTINATION="target" STARTARROW="None" ENDARROW="Default"/><node ID="target" TEXT="Target"/></node></map>"#;
+        let parsed = parse_mm(xml).unwrap();
+        assert_eq!(parsed.arrow_links, vec!["target"]);
+
+        let serialized = serialize_mm(&parsed);
+        assert!(serialized.contains(r#"<arrowlink DESTINATION="target"/>"#));
+        let reparsed = parse_mm(&serialized).unwrap();
+        assert_eq!(reparsed.arrow_links, vec!["target"]);
+    }
+}
