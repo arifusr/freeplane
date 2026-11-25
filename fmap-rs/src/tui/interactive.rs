@@ -35,6 +35,7 @@ enum PromptAction {
     AddLink { source_id: String },
     RemoveLink { source_id: String },
     AddChild { parent_id: String },
+    AddSibling { sibling_id: String },
     EditText { node_id: String },
     EditNote { node_id: String },
 }
@@ -516,7 +517,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::raw(" Keluar  "),
                     key_hint("[v]"),
                     Span::raw(" Mode Tree  "),
-                    key_hint("[←↑↓→ / WASD]"),
+                    key_hint("[←↑↓→]"),
                     Span::raw(" Sorot  "),
                     key_hint("[Space]"),
                     Span::raw(" Lipat  "),
@@ -543,15 +544,17 @@ fn tui_loop<B: ratatui::backend::Backend>(
             };
             let edit_help = Line::from(vec![
                 key_hint("[c]"),
-                Span::raw(" Tambah Child  "),
+                Span::raw(" Child  "),
+                key_hint("[s]"),
+                Span::raw(" Sibling  "),
                 key_hint("[e]"),
-                Span::raw(" Edit Teks  "),
+                Span::raw(" Edit  "),
                 key_hint("[n]"),
                 Span::raw(" Catatan  "),
                 key_hint("[Del]"),
-                Span::raw(" Hapus Node  "),
+                Span::raw(" Hapus  "),
                 key_hint("[r/x]"),
-                Span::raw(" Arrow Link"),
+                Span::raw(" Arrow"),
             ]);
             let status_line = status.as_ref().map(|message| {
                 Line::from(Span::styled(
@@ -791,6 +794,19 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             error: None,
                         });
                     }
+                    KeyCode::Char('s') => {
+                        if selected_id == tree.id {
+                            status = Some(status_err("Root tidak punya sibling."));
+                        } else {
+                            prompt = Some(PromptState {
+                                action: PromptAction::AddSibling {
+                                    sibling_id: selected_id.clone(),
+                                },
+                                input: TextInput::new(""),
+                                error: None,
+                            });
+                        }
+                    }
                     KeyCode::Char('e') => {
                         if let Some(node) = find_node_by_id(tree, &selected_id) {
                             prompt = Some(PromptState {
@@ -862,7 +878,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     KeyCode::PageDown => {
                         info_scroll = info_scroll.saturating_add(4);
                     }
-                    KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => {
+                    KeyCode::Left => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
                             if let Some(curr_idx) =
@@ -889,7 +905,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             }
                         }
                     }
-                    KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => {
+                    KeyCode::Right => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
                             if let Some(curr_idx) =
@@ -916,7 +932,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             }
                         }
                     }
-                    KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
+                    KeyCode::Up => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
                             if let Some(curr_idx) =
@@ -941,7 +957,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             }
                         }
                     }
-                    KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
+                    KeyCode::Down => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
                             if let Some(curr_idx) =
@@ -1050,6 +1066,18 @@ fn prompt_header(action: &PromptAction, tree: &TreeNode) -> (String, String) {
                 ),
             )
         }
+        PromptAction::AddSibling { sibling_id } => {
+            let sibling_text = find_node_by_id(tree, sibling_id)
+                .map(|node| node.text.as_str())
+                .unwrap_or("(node tidak ditemukan)");
+            (
+                "Tambah Sibling".to_string(),
+                format!(
+                    "Saudara dari [{}] \"{}\". Masukkan teks saudara baru:",
+                    sibling_id, sibling_text
+                ),
+            )
+        }
         PromptAction::EditText { node_id } => (
             "Edit Teks Node".to_string(),
             format!("Node [{}]. Masukkan teks baru:", node_id),
@@ -1109,20 +1137,26 @@ fn apply_prompt(
                     "Teks cabang tidak boleh kosong.".to_string(),
                 ));
             }
-            if find_node_by_id(tree, parent_id)
-                .map(|node| node.folded)
-                .unwrap_or(false)
-            {
-                storage
-                    .update_node_folded(parent_id, false)
-                    .map_err(PromptError::Storage)?;
-            }
-            let new_id = storage
-                .add_node(map_id, parent_id, text)
-                .map_err(PromptError::Storage)?;
+            let new_id = create_child(storage, map_id, tree, parent_id, text)?;
             Ok(ApplyOutcome {
                 selected_id: Some(new_id),
                 message: format!("Cabang \"{}\" ditambahkan.", text),
+            })
+        }
+        PromptAction::AddSibling { sibling_id } => {
+            let text = raw_input.trim();
+            if text.is_empty() {
+                return Err(PromptError::Validation(
+                    "Teks saudara tidak boleh kosong.".to_string(),
+                ));
+            }
+            let parent_id = find_parent_id(tree, sibling_id).ok_or_else(|| {
+                PromptError::Validation("Node ini tidak punya induk (root).".to_string())
+            })?;
+            let new_id = create_child(storage, map_id, tree, &parent_id, text)?;
+            Ok(ApplyOutcome {
+                selected_id: Some(new_id),
+                message: format!("Saudara \"{}\" ditambahkan.", text),
             })
         }
         PromptAction::EditText { node_id } => {
@@ -1150,6 +1184,26 @@ fn apply_prompt(
             })
         }
     }
+}
+
+fn create_child(
+    storage: &LadybugStorage,
+    map_id: &str,
+    tree: &TreeNode,
+    parent_id: &str,
+    text: &str,
+) -> Result<String, PromptError> {
+    if find_node_by_id(tree, parent_id)
+        .map(|node| node.folded)
+        .unwrap_or(false)
+    {
+        storage
+            .update_node_folded(parent_id, false)
+            .map_err(PromptError::Storage)?;
+    }
+    storage
+        .add_node(map_id, parent_id, text)
+        .map_err(PromptError::Storage)
 }
 
 fn collect_incoming_arrow_links<'a>(
@@ -1329,6 +1383,18 @@ fn flatten_visible<'a>(
     list
 }
 
+fn find_parent_id(node: &TreeNode, target_id: &str) -> Option<String> {
+    for child in &node.children {
+        if child.id == target_id {
+            return Some(node.id.clone());
+        }
+        if let Some(parent_id) = find_parent_id(child, target_id) {
+            return Some(parent_id);
+        }
+    }
+    None
+}
+
 fn find_node_by_id<'a>(node: &'a TreeNode, target_id: &str) -> Option<&'a TreeNode> {
     if node.id == target_id {
         return Some(node);
@@ -1373,6 +1439,18 @@ mod tests {
             collect_incoming_arrow_links(&root, "target"),
             vec![("source", "Source")]
         );
+    }
+
+    #[test]
+    fn find_parent_id_locates_nested_parent() {
+        let mut root = TreeNode::new("root", "Root");
+        let mut branch = TreeNode::new("branch", "Branch");
+        branch.children.push(TreeNode::new("leaf", "Leaf"));
+        root.children.push(branch);
+
+        assert_eq!(find_parent_id(&root, "branch").as_deref(), Some("root"));
+        assert_eq!(find_parent_id(&root, "leaf").as_deref(), Some("branch"));
+        assert_eq!(find_parent_id(&root, "root"), None);
     }
 
     #[test]
