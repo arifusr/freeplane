@@ -102,9 +102,28 @@ case "$ARCH" in
     ;;
 esac
 
+# Deteksi versi fmap yang sudah terpasang sebelumnya
+PREV_PATH=""
+if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+  PREV_PATH="${INSTALL_DIR}/${BINARY_NAME}"
+elif command -v "${BINARY_NAME}" >/dev/null 2>&1; then
+  PREV_PATH="$(command -v "${BINARY_NAME}")"
+fi
+
+PREV_VERSION=""
+if [ -n "$PREV_PATH" ]; then
+  PREV_VERSION="$("$PREV_PATH" --version 2>/dev/null | head -n 1 || true)"
+  [ -z "$PREV_VERSION" ] && PREV_VERSION="(tidak diketahui)"
+fi
+
 echo -e "  • Sistem Operasi : ${BOLD}Linux${NC}"
 echo -e "  • Arsitektur CPU : ${BOLD}${ARCH_TARGET}${NC}"
 echo -e "  • Lokasi Target  : ${BOLD}${INSTALL_DIR}/${BINARY_NAME}${NC}"
+if [ -n "$PREV_PATH" ]; then
+  echo -e "  • Versi terpasang: ${BOLD}${PREV_VERSION}${NC} (${PREV_PATH})"
+else
+  echo -e "  • Versi terpasang: ${YELLOW}belum terpasang${NC}"
+fi
 
 # 2. Tentukan Versi Rilis
 if [ -n "$REQUESTED_TAG" ]; then
@@ -149,6 +168,9 @@ fi
 
 chmod +x "${TMP_DIR}/${BINARY_NAME}"
 
+NEW_VERSION="$("${TMP_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -n 1 || true)"
+[ -z "$NEW_VERSION" ] && NEW_VERSION="(tidak diketahui)"
+
 # 6. Pasang Binary ke Direktori Target
 mkdir -p "$INSTALL_DIR"
 if [ "$USE_SYSTEM" = true ] && [ "$EUID" -ne 0 ]; then
@@ -159,6 +181,15 @@ else
 fi
 
 echo -e "\n${BOLD}${GREEN}🎉 SUKSES! fmap berhasil dipasang di: ${INSTALL_DIR}/${BINARY_NAME}${NC}"
+if [ -n "$PREV_VERSION" ]; then
+  if [ "$PREV_VERSION" = "$NEW_VERSION" ]; then
+    echo -e "Versi           : ${BOLD}${NEW_VERSION}${NC} (sudah versi yang sama)"
+  else
+    echo -e "Versi           : ${YELLOW}${PREV_VERSION}${NC} → ${BOLD}${GREEN}${NEW_VERSION}${NC}"
+  fi
+else
+  echo -e "Versi           : ${BOLD}${GREEN}${NEW_VERSION}${NC}"
+fi
 
 # 7. Periksa apakah INSTALL_DIR ada di PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
