@@ -300,6 +300,44 @@ fn main() -> Result<()> {
             println!("\x1b[32m✔ Cabang {} dihapus.\x1b[0m", node_id);
         }
 
+        Commands::Node(NodeCommands::Up { map_id, node_id }) => {
+            let moved = storage.move_node(&map_id, &node_id, -1)?;
+            if args.json {
+                let out = serde_json::json!({
+                    "success": true,
+                    "moved": moved,
+                    "id": node_id,
+                    "mapId": map_id
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                return Ok(());
+            }
+            if moved {
+                println!("\x1b[32m✔ Cabang {} dinaikkan.\x1b[0m", node_id);
+            } else {
+                println!("Cabang {} sudah berada di urutan paling atas.", node_id);
+            }
+        }
+
+        Commands::Node(NodeCommands::Down { map_id, node_id }) => {
+            let moved = storage.move_node(&map_id, &node_id, 1)?;
+            if args.json {
+                let out = serde_json::json!({
+                    "success": true,
+                    "moved": moved,
+                    "id": node_id,
+                    "mapId": map_id
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                return Ok(());
+            }
+            if moved {
+                println!("\x1b[32m✔ Cabang {} diturunkan.\x1b[0m", node_id);
+            } else {
+                println!("Cabang {} sudah berada di urutan paling bawah.", node_id);
+            }
+        }
+
         Commands::Link(LinkCommands::Add {
             map_id,
             source_id,

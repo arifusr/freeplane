@@ -123,10 +123,15 @@ impl LadybugStorage {
                         folded BOOLEAN,
                         created_at STRING,
                         updated_at STRING,
+                        sort_order INT64,
                         PRIMARY KEY(id)
                     )",
                 )
                 .context("Gagal membuat tabel node MapNode")?;
+            } else if !has_node_column(conn, "MapNode", "sort_order") {
+                // Migrasi database lama: tambahkan kolom urutan sibling.
+                conn.query("ALTER TABLE MapNode ADD sort_order INT64")
+                    .context("Gagal menambahkan kolom sort_order pada MapNode")?;
             }
 
             if !existing_tables.contains(&"PARENT_OF".to_string()) {
@@ -214,7 +219,7 @@ impl LadybugStorage {
             conn.query(&map_cypher).context("Gagal insert MindMap")?;
 
             let node_cypher = format!(
-                "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '', position: '', folded: false, created_at: '{}', updated_at: '{}'}})",
+                "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '', position: '', folded: false, created_at: '{}', updated_at: '{}', sort_order: 0}})",
                 esc_cypher(&root_id),
                 esc_cypher(&map_id),
                 esc_cypher(root_text),
@@ -236,13 +241,30 @@ impl LadybugStorage {
                 Utc::now().timestamp_nanos_opt().unwrap_or(0)
             );
 
+            // Node baru selalu diletakkan paling bawah di antara sibling-nya.
+            let siblings_q = format!(
+                "MATCH (p:MapNode {{id: '{}'}})-[:PARENT_OF]->(c:MapNode) RETURN c.sort_order",
+                esc_cypher(parent_id)
+            );
+            let mut next_order = 0_i64;
+            if let Ok(mut res) = conn.query(&siblings_q) {
+                let mut max_order = -1_i64;
+                for row in &mut res {
+                    if let Some(value) = row.get(0) {
+                        max_order = max_order.max(val_to_i64(value));
+                    }
+                }
+                next_order = max_order + 1;
+            }
+
             let node_q = format!(
-                "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '', position: '', folded: false, created_at: '{}', updated_at: '{}'}})",
+                "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '', position: '', folded: false, created_at: '{}', updated_at: '{}', sort_order: {}}})",
                 esc_cypher(&new_id),
                 esc_cypher(map_id),
                 esc_cypher(text),
                 esc_cypher(&now),
-                esc_cypher(&now)
+                esc_cypher(&now),
+                next_order
             );
             conn.query(&node_q).context("Gagal create child node")?;
 
@@ -261,6 +283,94 @@ impl LadybugStorage {
             let _ = conn.query(&touch_q);
 
             Ok(new_id)
+        })
+    }
+
+    /// Geser urutan node di antara sibling-nya. `delta` -1 = naik, +1 = turun.
+    /// Mengembalikan `true` jika urutan berubah.
+    pub fn move_node(&self, map_id: &str, node_id: &str, delta: i64) -> Result<bool> {
+        self.with_conn(|conn| {
+            let exists_q = format!(
+                "MATCH (n:MapNode {{id: '{}', map_id: '{}'}}) RETURN count(n)",
+                esc_cypher(node_id),
+                esc_cypher(map_id)
+            );
+            let mut exists_res = conn.query(&exists_q).context("Gagal memvalidasi node")?;
+            let exists = exists_res
+                .next()
+                .and_then(|row| row.get(0).map(val_to_i64))
+                .unwrap_or(0);
+            if exists == 0 {
+                return Err(anyhow!(
+                    "Node '{}' tidak ditemukan di peta '{}'",
+                    node_id,
+                    map_id
+                ));
+            }
+
+            let parent_q = format!(
+                "MATCH (p:MapNode {{map_id: '{}'}})-[:PARENT_OF]->(n:MapNode {{id: '{}', map_id: '{}'}}) RETURN p.id",
+                esc_cypher(map_id),
+                esc_cypher(node_id),
+                esc_cypher(map_id)
+            );
+            let mut parent_res = conn.query(&parent_q).context("Gagal query induk node")?;
+            let Some(parent_row) = parent_res.next() else {
+                // Root tidak punya sibling, jadi tidak bisa digeser.
+                return Ok(false);
+            };
+            let parent_id = val_to_string(&parent_row[0]);
+            if parent_id.is_empty() {
+                return Ok(false);
+            }
+
+            let siblings_q = format!(
+                "MATCH (p:MapNode {{id: '{}'}})-[:PARENT_OF]->(c:MapNode {{map_id: '{}'}}) RETURN c.id, c.sort_order, c.created_at",
+                esc_cypher(&parent_id),
+                esc_cypher(map_id)
+            );
+            let mut res = conn.query(&siblings_q).context("Gagal query sibling")?;
+            let mut siblings: Vec<(i64, String, String)> = Vec::new();
+            for row in &mut res {
+                if row.len() >= 3 {
+                    siblings.push((
+                        val_to_i64(&row[1]),
+                        val_to_string(&row[2]),
+                        val_to_string(&row[0]),
+                    ));
+                }
+            }
+            siblings.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.cmp(&b.1))
+                    .then_with(|| a.2.cmp(&b.2))
+            });
+
+            let Some(index) = siblings.iter().position(|(_, _, id)| id == node_id) else {
+                return Ok(false);
+            };
+            let target = index as i64 + delta;
+            if target < 0 || target >= siblings.len() as i64 {
+                return Ok(false);
+            }
+            siblings.swap(index, target as usize);
+
+            // Tulis ulang seluruh urutan agar nilai yang masih NULL/duplikat
+            // (dari database lama) ikut dinormalisasi.
+            for (order, (_, _, sibling_id)) in siblings.iter().enumerate() {
+                let update_q = format!(
+                    "MATCH (n:MapNode {{id: '{}', map_id: '{}'}}) SET n.sort_order = {}",
+                    esc_cypher(sibling_id),
+                    esc_cypher(map_id),
+                    order
+                );
+                conn.query(&update_q)
+                    .context("Gagal menyimpan urutan node")?;
+            }
+
+            let now = now_string();
+            touch_map(conn, map_id, &now)?;
+            Ok(true)
         })
     }
 
@@ -395,19 +505,35 @@ impl LadybugStorage {
             }
 
             let edges_q = format!(
-                "MATCH (p:MapNode {{map_id: '{}'}})-[r:PARENT_OF]->(c:MapNode {{map_id: '{}'}}) RETURN p.id, c.id",
+                "MATCH (p:MapNode {{map_id: '{}'}})-[r:PARENT_OF]->(c:MapNode {{map_id: '{}'}}) RETURN p.id, c.id, c.sort_order, c.created_at",
                 esc_cypher(map_id),
                 esc_cypher(map_id)
             );
             let mut e_res = conn.query(&edges_q).context("Gagal query edges")?;
-            let mut parent_to_children: HashMap<String, Vec<String>> = HashMap::new();
+            let mut parent_to_children: HashMap<String, Vec<(i64, String, String)>> =
+                HashMap::new();
 
             for row in &mut e_res {
-                if row.len() >= 2 {
+                if row.len() >= 4 {
                     let p_id = val_to_string(&row[0]);
                     let c_id = val_to_string(&row[1]);
-                    parent_to_children.entry(p_id).or_default().push(c_id);
+                    let sort_order = val_to_i64(&row[2]);
+                    let created_at = val_to_string(&row[3]);
+                    parent_to_children
+                        .entry(p_id)
+                        .or_default()
+                        .push((sort_order, created_at, c_id));
                 }
+            }
+
+            // Urutkan sibling: yang paling lama di atas, yang baru di bawah.
+            // created_at menjadi fallback untuk database lama yang sort_order-nya NULL.
+            for children in parent_to_children.values_mut() {
+                children.sort_by(|a, b| {
+                    a.0.cmp(&b.0)
+                        .then_with(|| a.1.cmp(&b.1))
+                        .then_with(|| a.2.cmp(&b.2))
+                });
             }
 
             let arrow_edges_q = format!(
@@ -431,11 +557,11 @@ impl LadybugStorage {
             fn assemble(
                 curr_id: &str,
                 node_map: &mut HashMap<String, TreeNode>,
-                parent_to_children: &HashMap<String, Vec<String>>,
+                parent_to_children: &HashMap<String, Vec<(i64, String, String)>>,
             ) -> Option<TreeNode> {
                 let mut curr_node = node_map.remove(curr_id)?;
-                if let Some(child_ids) = parent_to_children.get(curr_id) {
-                    for cid in child_ids {
+                if let Some(child_entries) = parent_to_children.get(curr_id) {
+                    for (_, _, cid) in child_entries {
                         if let Some(child_node) = assemble(cid, node_map, parent_to_children) {
                             curr_node.children.push(child_node);
                         }
@@ -545,10 +671,11 @@ impl LadybugStorage {
                 map_id: &str,
                 parent_id: Option<&str>,
                 node: &TreeNode,
+                sort_order: i64,
                 now: &str,
             ) -> Result<()> {
                 let n_q = format!(
-                    "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '{}', position: '{}', folded: {}, created_at: '{}', updated_at: '{}'}})",
+                    "CREATE (:MapNode {{id: '{}', map_id: '{}', text: '{}', note: '{}', position: '{}', folded: {}, created_at: '{}', updated_at: '{}', sort_order: {}}})",
                     esc_cypher(&node.id),
                     esc_cypher(map_id),
                     esc_cypher(&node.text),
@@ -556,7 +683,8 @@ impl LadybugStorage {
                     esc_cypher(node.position.as_deref().unwrap_or("")),
                     node.folded,
                     esc_cypher(now),
-                    esc_cypher(now)
+                    esc_cypher(now),
+                    sort_order
                 );
                 conn.query(&n_q).context("Gagal insert node")?;
 
@@ -569,8 +697,8 @@ impl LadybugStorage {
                     conn.query(&r_q).context("Gagal link edge PARENT_OF")?;
                 }
 
-                for child in &node.children {
-                    insert_recursive(conn, map_id, Some(&node.id), child, now)?;
+                for (idx, child) in node.children.iter().enumerate() {
+                    insert_recursive(conn, map_id, Some(&node.id), child, idx as i64, now)?;
                 }
 
                 Ok(())
@@ -593,7 +721,7 @@ impl LadybugStorage {
                 Ok(())
             }
 
-            insert_recursive(conn, map_id, None, &processed_tree, &now)?;
+            insert_recursive(conn, map_id, None, &processed_tree, 0, &now)?;
             insert_arrow_links(conn, map_id, &processed_tree)?;
             Ok(())
         })
@@ -847,6 +975,19 @@ fn val_to_i64(v: &Value) -> i64 {
         Value::String(s) => s.parse().unwrap_or(0),
         _ => 0,
     }
+}
+
+fn has_node_column(conn: &Connection, table: &str, column: &str) -> bool {
+    let q = format!("CALL TABLE_INFO('{}') RETURN *", esc_cypher(table));
+    let Ok(mut res) = conn.query(&q) else {
+        return false;
+    };
+    for row in &mut res {
+        if row.len() > 1 && val_to_string(&row[1]) == column {
+            return true;
+        }
+    }
+    false
 }
 
 fn esc_cypher(s: &str) -> String {

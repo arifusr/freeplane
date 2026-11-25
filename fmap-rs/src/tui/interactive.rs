@@ -547,6 +547,8 @@ fn tui_loop<B: ratatui::backend::Backend>(
                 Span::raw(" Child  "),
                 key_hint("[s]"),
                 Span::raw(" Sibling  "),
+                key_hint("[⇧↑↓]"),
+                Span::raw(" Urut  "),
                 key_hint("[e]"),
                 Span::raw(" Edit  "),
                 key_hint("[n]"),
@@ -932,6 +934,40 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             }
                         }
                     }
+                    KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        match apply_move(storage, map_id, tree, &selected_id, -1) {
+                            Ok(true) => {
+                                info_scroll = 0;
+                                status = Some(status_ok("Urutan node dinaikkan."));
+                            }
+                            Ok(false) => {
+                                status = Some(status_err(
+                                    "Node sudah di urutan paling atas atau tidak punya sibling.",
+                                ));
+                            }
+                            Err(err) => {
+                                status =
+                                    Some(status_err(format!("Gagal mengubah urutan: {}", err)));
+                            }
+                        }
+                    }
+                    KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        match apply_move(storage, map_id, tree, &selected_id, 1) {
+                            Ok(true) => {
+                                info_scroll = 0;
+                                status = Some(status_ok("Urutan node diturunkan."));
+                            }
+                            Ok(false) => {
+                                status = Some(status_err(
+                                    "Node sudah di urutan paling bawah atau tidak punya sibling.",
+                                ));
+                            }
+                            Err(err) => {
+                                status =
+                                    Some(status_err(format!("Gagal mengubah urutan: {}", err)));
+                            }
+                        }
+                    }
                     KeyCode::Up => {
                         if is_canvas_mode {
                             let cdata = compute_canvas(tree, &canvas_opts);
@@ -1184,6 +1220,20 @@ fn apply_prompt(
             })
         }
     }
+}
+
+fn apply_move(
+    storage: &LadybugStorage,
+    map_id: &str,
+    tree: &mut TreeNode,
+    selected_id: &str,
+    delta: i64,
+) -> Result<bool> {
+    let moved = storage.move_node(map_id, selected_id, delta)?;
+    if moved {
+        *tree = storage.load_tree(map_id)?;
+    }
+    Ok(moved)
 }
 
 fn create_child(

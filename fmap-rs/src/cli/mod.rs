@@ -115,6 +115,12 @@ pub enum NodeCommands {
 
     #[command(about = "Hapus cabang")]
     Rm { map_id: String, node_id: String },
+
+    #[command(about = "Naikkan urutan node di antara saudaranya")]
+    Up { map_id: String, node_id: String },
+
+    #[command(about = "Turunkan urutan node di antara saudaranya")]
+    Down { map_id: String, node_id: String },
 }
 
 #[derive(Subcommand, Debug)]

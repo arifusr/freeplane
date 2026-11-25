@@ -68,6 +68,10 @@ Binary executable akan berada di `./target/release/fmap`.
 # Tambah cabang baru
 ./target/release/fmap node add <map_id> <parent_id> "Nama Cabang"
 
+# Geser urutan node di antara saudaranya
+./target/release/fmap node up <map_id> <node_id>
+./target/release/fmap node down <map_id> <node_id>
+
 # Tampilkan struktur pohon outliner
 ./target/release/fmap view <map_id>
 
@@ -108,13 +112,17 @@ TUI juga bisa dipakai untuk mengubah isi peta tanpa keluar ke CLI:
 | --- | --- |
 | `c` | Tambah child di bawah node terpilih |
 | `s` | Tambah sibling (saudara) dari node terpilih |
+| `Shift+↑` / `Shift+↓` | Geser node naik / turun di antara saudaranya |
 | `e` | Edit teks node terpilih (prefill teks lama) |
 | `n` | Edit catatan node terpilih |
 | `Del` / `Shift+D` | Hapus node beserta seluruh subtree-nya (dengan konfirmasi) |
 | `r` / `x` | Tambah / hapus arrow link |
 
 Navigasi memakai tombol panah (`←↑↓→`); WASD dan hjkl tidak lagi dipakai agar `s`
-bisa digunakan untuk sibling. Dialog input mendukung `←/→`, `Home/End`,
+bisa digunakan untuk sibling. Urutan sibling selalu ditampilkan dari yang paling
+lama di atas ke yang paling baru di bawah, baik di Tree View maupun 2D Canvas;
+urutan ini bisa diubah manual lewat `Shift+↑`/`Shift+↓` atau perintah CLI
+`node up`/`node down`. Dialog input mendukung `←/→`, `Home/End`,
 `Backspace`, dan `Delete` untuk mengedit teks. `Enter` menyimpan, `Esc`
 membatalkan. Root node tidak bisa dihapus dan tidak punya sibling. Setelah setiap
 perubahan, peta dimuat ulang otomatis dan pesan status singkat muncul di bar
