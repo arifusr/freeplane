@@ -33,12 +33,25 @@ impl LadybugStorage {
                 Err(err) => {
                     last_error = err.to_string();
                     let is_locked = last_error.contains("lock") || last_error.contains("Lock");
-                    if !is_locked || attempt + 1 >= OPEN_MAX_ATTEMPTS {
+                    // Mismatch versi storage tidak akan berubah walau dicoba ulang.
+                    let is_version_mismatch = last_error.contains("different version")
+                        || last_error.contains("storage version");
+                    if is_version_mismatch || !is_locked || attempt + 1 >= OPEN_MAX_ATTEMPTS {
                         break;
                     }
                     thread::sleep(OPEN_RETRY_DELAY);
                 }
             }
+        }
+
+        if last_error.contains("different version") || last_error.contains("storage version") {
+            return Err(anyhow!(
+                "Gagal membuka database LadybugDB di: {}. File database dibuat oleh versi \
+                 fmap/LadybugDB yang lebih baru. Perbarui fmap ke versi terbaru untuk membukanya. \
+                 Detail: {}",
+                self.db_path.display(),
+                last_error
+            ));
         }
 
         Err(anyhow!(
@@ -92,6 +105,7 @@ impl LadybugStorage {
             let mut existing_tables = Vec::new();
             if let Ok(mut res) = tables_res {
                 for row in &mut res {
+                    let row = row?;
                     if row.len() > 1 {
                         existing_tables.push(val_to_string(&row[1]));
                     }
@@ -155,6 +169,7 @@ impl LadybugStorage {
             let mut maps = Vec::new();
 
             for row in &mut res {
+                let row = row?;
                 if row.len() >= 5 {
                     let id = val_to_string(&row[0]);
                     let title = val_to_string(&row[1]);
@@ -168,8 +183,10 @@ impl LadybugStorage {
                         esc_cypher(&id)
                     );
                     let node_count = if let Ok(mut c_res) = conn.query(&count_q) {
-                        c_res.next()
-                            .and_then(|r| r.get(0).map(val_to_i64))
+                        c_res
+                            .next()
+                            .and_then(|r| r.ok())
+                            .and_then(|row| row.get(0).map(val_to_i64))
                             .unwrap_or(0) as usize
                     } else {
                         0
@@ -178,8 +195,10 @@ impl LadybugStorage {
                     // Hitung jumlah edge
                     let edge_q = format!("MATCH (a:MapNode)-[r:PARENT_OF]->(b:MapNode) WHERE a.map_id = '{}' RETURN count(r)", esc_cypher(&id));
                     let edge_count = if let Ok(mut e_res) = conn.query(&edge_q) {
-                        e_res.next()
-                            .and_then(|r| r.get(0).map(val_to_i64))
+                        e_res
+                            .next()
+                            .and_then(|r| r.ok())
+                            .and_then(|row| row.get(0).map(val_to_i64))
                             .unwrap_or(0) as usize
                     } else {
                         0
@@ -250,6 +269,7 @@ impl LadybugStorage {
             if let Ok(mut res) = conn.query(&siblings_q) {
                 let mut max_order = -1_i64;
                 for row in &mut res {
+                    let Ok(row) = row else { continue };
                     if let Some(value) = row.get(0) {
                         max_order = max_order.max(val_to_i64(value));
                     }
@@ -298,6 +318,7 @@ impl LadybugStorage {
             let mut exists_res = conn.query(&exists_q).context("Gagal memvalidasi node")?;
             let exists = exists_res
                 .next()
+                .and_then(|r| r.ok())
                 .and_then(|row| row.get(0).map(val_to_i64))
                 .unwrap_or(0);
             if exists == 0 {
@@ -315,7 +336,7 @@ impl LadybugStorage {
                 esc_cypher(map_id)
             );
             let mut parent_res = conn.query(&parent_q).context("Gagal query induk node")?;
-            let Some(parent_row) = parent_res.next() else {
+            let Some(parent_row) = parent_res.next().transpose()? else {
                 // Root tidak punya sibling, jadi tidak bisa digeser.
                 return Ok(false);
             };
@@ -332,6 +353,7 @@ impl LadybugStorage {
             let mut res = conn.query(&siblings_q).context("Gagal query sibling")?;
             let mut siblings: Vec<(i64, String, String)> = Vec::new();
             for row in &mut res {
+                let row = row?;
                 if row.len() >= 3 {
                     siblings.push((
                         val_to_i64(&row[1]),
@@ -423,6 +445,7 @@ impl LadybugStorage {
                 );
                 if let Ok(mut res) = conn.query(&child_q) {
                     for row in &mut res {
+                        let Ok(row) = row else { continue };
                         if let Some(value) = row.get(0) {
                             let child_id = val_to_string(value);
                             if !child_id.is_empty() && !ids.contains(&child_id) {
@@ -462,7 +485,7 @@ impl LadybugStorage {
                 esc_cypher(map_id)
             );
             let mut m_res = conn.query(&map_q).context("Gagal query MindMap meta")?;
-            let (root_id, title) = if let Some(row) = m_res.next() {
+            let (root_id, title) = if let Some(row) = m_res.next().transpose()? {
                 (val_to_string(&row[0]), val_to_string(&row[1]))
             } else {
                 return Err(anyhow!("Mindmap ID '{}' tidak ditemukan", map_id));
@@ -476,6 +499,7 @@ impl LadybugStorage {
             let mut node_map: HashMap<String, TreeNode> = HashMap::new();
 
             for row in &mut n_res {
+                let row = row?;
                 if row.len() >= 7 {
                     let id = val_to_string(&row[0]);
                     let text = val_to_string(&row[1]);
@@ -514,6 +538,7 @@ impl LadybugStorage {
                 HashMap::new();
 
             for row in &mut e_res {
+                let row = row?;
                 if row.len() >= 4 {
                     let p_id = val_to_string(&row[0]);
                     let c_id = val_to_string(&row[1]);
@@ -545,6 +570,7 @@ impl LadybugStorage {
                 .query(&arrow_edges_q)
                 .context("Gagal query arrow links")?;
             for row in &mut arrow_res {
+                let row = row?;
                 if row.len() >= 2 {
                     let source_id = val_to_string(&row[0]);
                     let target_id = val_to_string(&row[1]);
@@ -737,7 +763,11 @@ impl LadybugStorage {
                 esc_cypher(map_id)
             );
             let mut res = conn.query(&validate_q).context("Gagal memvalidasi node arrow link")?;
-            let count = res.next().and_then(|row| row.get(0).map(val_to_i64)).unwrap_or(0);
+            let count = res
+                .next()
+                .and_then(|r| r.ok())
+                .and_then(|row| row.get(0).map(val_to_i64))
+                .unwrap_or(0);
             if count == 0 {
                 return Err(anyhow!(
                     "Node sumber '{}' atau target '{}' tidak ditemukan di peta '{}'",
@@ -757,6 +787,7 @@ impl LadybugStorage {
             let mut exists_res = conn.query(&exists_q).context("Gagal memeriksa arrow link")?;
             let exists = exists_res
                 .next()
+                .and_then(|r| r.ok())
                 .and_then(|row| row.get(0).map(val_to_i64))
                 .unwrap_or(0);
             if exists == 0 {
@@ -786,7 +817,11 @@ impl LadybugStorage {
                 esc_cypher(map_id)
             );
             let mut res = conn.query(&validate_q).context("Gagal memvalidasi node arrow link")?;
-            let count = res.next().and_then(|row| row.get(0).map(val_to_i64)).unwrap_or(0);
+            let count = res
+                .next()
+                .and_then(|r| r.ok())
+                .and_then(|row| row.get(0).map(val_to_i64))
+                .unwrap_or(0);
             if count == 0 {
                 return Err(anyhow!(
                     "Node sumber '{}' atau target '{}' tidak ditemukan di peta '{}'",
@@ -831,6 +866,7 @@ impl LadybugStorage {
             let mut results = Vec::new();
 
             for row in &mut res {
+                let row = row?;
                 if row.len() >= 6 {
                     results.push(MapNode {
                         id: val_to_string(&row[0]),
@@ -875,7 +911,7 @@ impl LadybugStorage {
                 esc_cypher(node_b)
             );
             let mut res = conn.query(&q).context("Gagal query shortest path")?;
-            if let Some(row) = res.next() {
+            if let Some(row) = res.next().transpose()? {
                 if let Some(val) = row.get(0) {
                     let s = val_to_string(val);
                     let cleaned = s.trim_matches(|c| c == '[' || c == ']');
@@ -983,6 +1019,7 @@ fn has_node_column(conn: &Connection, table: &str, column: &str) -> bool {
         return false;
     };
     for row in &mut res {
+        let Ok(row) = row else { continue };
         if row.len() > 1 && val_to_string(&row[1]) == column {
             return true;
         }
