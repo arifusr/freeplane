@@ -759,21 +759,40 @@ fn render_canvas_viewport(
             } else {
                 let start_x = x;
                 let first_char = row.get(x).copied().unwrap_or(' ');
-                let is_edge = is_box_drawing_char(first_char);
+                let is_arrow = canvas
+                    .arrow_mask
+                    .get(y)
+                    .and_then(|r| r.get(x))
+                    .copied()
+                    .unwrap_or(false);
+                let is_edge = !is_arrow && is_box_drawing_char(first_char);
 
                 while x < x_end {
                     if row_nodes.iter().any(|n| x >= n.x && x < n.x + n.width) {
                         break;
                     }
                     let ch = row.get(x).copied().unwrap_or(' ');
-                    if is_box_drawing_char(ch) != is_edge {
+                    let ch_is_arrow = canvas
+                        .arrow_mask
+                        .get(y)
+                        .and_then(|r| r.get(x))
+                        .copied()
+                        .unwrap_or(false);
+                    if ch_is_arrow != is_arrow {
+                        break;
+                    }
+                    if !is_arrow && is_box_drawing_char(ch) != is_edge {
                         break;
                     }
                     x += 1;
                 }
 
                 let text: String = row[start_x..x].iter().collect();
-                let style = if is_edge {
+                let style = if is_arrow {
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_edge {
                     Style::default().fg(Color::DarkGray)
                 } else {
                     Style::default()

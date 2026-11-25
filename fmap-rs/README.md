@@ -93,8 +93,10 @@ Binary executable akan berada di `./target/release/fmap`.
 ./target/release/fmap link rm <map_id> <source_node_id> <target_node_id>
 ```
 
-Arrow link dari format FreeMind/Freeplane `.mm` ikut diimpor dan diekspor. Di TUI,
-panel info menampilkan arrow link keluar dan masuk untuk node terpilih. Tekan `r`
-untuk membuat link dari node terpilih (masukkan ID target), atau `x` untuk
-menghapus link keluar ke ID target tersebut.
+Arrow link dari format FreeMind/Freeplane `.mm` ikut diimpor dan diekspor. Di mode
+2D Canvas, arrow link digambar sebagai garis ortogonal bermata panah (`▶`/`◀`) dan
+diwarnai magenta; garis yang melewati kotak node akan "tersembunyi" di belakang
+label agar teks tetap utuh. Di TUI, panel info juga menampilkan arrow link keluar
+dan masuk untuk node terpilih. Tekan `r` untuk membuat link dari node terpilih
+(masukkan ID target), atau `x` untuk menghapus link keluar ke ID target tersebut.
 

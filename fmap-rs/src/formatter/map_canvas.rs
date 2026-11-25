@@ -31,6 +31,7 @@ pub struct CanvasNodeInfo {
     pub x: usize,
     pub y: usize,
     pub parent_idx: Option<usize>,
+    pub arrow_links: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +40,9 @@ pub struct CanvasData {
     pub width: usize,
     pub height: usize,
     pub grid: Vec<Vec<char>>,
+    /// Menandai sel grid yang ditempati garis arrow link (bukan edge pohon),
+    /// supaya TUI bisa mewarnainya berbeda tanpa mengganggu label node.
+    pub arrow_mask: Vec<Vec<bool>>,
     pub ascii: bool,
 }
 
@@ -77,7 +81,11 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
         let has_children = !n.children.is_empty();
         let marker = if has_children {
             if n.folded {
-                if options.ascii { "+".into() } else { "▸".into() }
+                if options.ascii {
+                    "+".into()
+                } else {
+                    "▸".into()
+                }
             } else if options.ascii {
                 "-".into()
             } else {
@@ -102,11 +110,19 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
             x: 0,
             y: 0,
             parent_idx,
+            arrow_links: n.arrow_links.clone(),
         });
 
         if !n.folded {
             for child in &n.children {
-                collect(child, depth + 1, Some(current_idx), max_depth, options, list);
+                collect(
+                    child,
+                    depth + 1,
+                    Some(current_idx),
+                    max_depth,
+                    options,
+                    list,
+                );
             }
         }
     }
@@ -119,6 +135,7 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
             width: 0,
             height: 0,
             grid: Vec::new(),
+            arrow_mask: Vec::new(),
             ascii: options.ascii,
         };
     }
@@ -154,6 +171,7 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
 
     // Render ke grid karakter 2D
     let mut grid = vec![vec![' '; total_width]; total_height];
+    let mut arrow_mask = vec![vec![false; total_width]; total_height];
 
     // Gambar edge garis konektor antar induk dan anak
     for i in 0..layout_nodes.len() {
@@ -167,6 +185,10 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
         }
     }
 
+    // Gambar arrow link antar-node (bukan edge pohon). Digambar sebelum label
+    // agar kotak/label node tetap utuh dan menutupi garis yang melewatinya.
+    draw_arrow_links(&mut grid, &mut arrow_mask, &layout_nodes, options.ascii);
+
     // Gambar label node [ Text ▾ ]
     for ln in &layout_nodes {
         let box_text = if ln.marker.is_empty() {
@@ -176,6 +198,11 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
         };
 
         put_str(&mut grid, ln.x, ln.y, &box_text);
+
+        // Label menimpa arrow, jadi bersihkan mask pada sel yang tertutup.
+        for x in ln.x..(ln.x + box_text.chars().count()).min(total_width) {
+            arrow_mask[ln.y][x] = false;
+        }
     }
 
     CanvasData {
@@ -183,6 +210,7 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
         width: total_width,
         height: total_height,
         grid,
+        arrow_mask,
         ascii: options.ascii,
     }
 }
@@ -365,6 +393,197 @@ fn put_char(grid: &mut [Vec<char>], x: usize, y: usize, ch: char) {
     }
 }
 
+fn draw_arrow_links(
+    grid: &mut [Vec<char>],
+    mask: &mut [Vec<bool>],
+    nodes: &[CanvasNodeInfo],
+    ascii: bool,
+) {
+    let index: std::collections::HashMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+
+    for (src_idx, src) in nodes.iter().enumerate() {
+        for target_id in &src.arrow_links {
+            let Some(&dst_idx) = index.get(target_id.as_str()) else {
+                continue;
+            };
+            if dst_idx == src_idx {
+                continue;
+            }
+            draw_arrow(grid, mask, src, &nodes[dst_idx], ascii);
+        }
+    }
+}
+
+fn draw_arrow(
+    grid: &mut [Vec<char>],
+    mask: &mut [Vec<bool>],
+    src: &CanvasNodeInfo,
+    dst: &CanvasNodeInfo,
+    ascii: bool,
+) {
+    let src_right = src.x + src.width;
+    let src_left = src.x.saturating_sub(1);
+    let dst_left = dst.x.saturating_sub(1);
+    let dst_right = dst.x + dst.width;
+    let bar = if ascii { '-' } else { '─' };
+
+    if dst.x >= src_right {
+        // Target di kanan sumber.
+        let exit_x = src_right;
+        let enter_x = dst_left;
+        if src.y == dst.y {
+            fill_h(grid, mask, src.y, exit_x, enter_x, bar);
+            put_arrow(grid, mask, enter_x, dst.y, arrow_head(true, ascii));
+        } else {
+            let corridor = exit_x + (enter_x.saturating_sub(exit_x) / 2).max(1);
+            draw_corridor(grid, mask, src.y, exit_x, corridor, dst.y, enter_x, ascii);
+        }
+    } else if dst_right <= src.x {
+        // Target di kiri sumber.
+        let exit_x = src_left;
+        let enter_x = dst_right;
+        if src.y == dst.y {
+            fill_h(grid, mask, src.y, exit_x, enter_x, bar);
+            put_arrow(grid, mask, enter_x, dst.y, arrow_head(false, ascii));
+        } else {
+            let corridor = enter_x + (exit_x.saturating_sub(enter_x) / 2).max(1);
+            draw_corridor(grid, mask, src.y, exit_x, corridor, dst.y, enter_x, ascii);
+        }
+    } else if src.y != dst.y {
+        // Kolom node bertumpuk (umumnya level yang sama): belok lewat kanan.
+        let exit_x = src_right;
+        let enter_x = dst_right;
+        let corridor = exit_x.max(enter_x) + 2;
+        draw_corridor(grid, mask, src.y, exit_x, corridor, dst.y, enter_x, ascii);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_corridor(
+    grid: &mut [Vec<char>],
+    mask: &mut [Vec<bool>],
+    sy: usize,
+    exit_x: usize,
+    corridor_x: usize,
+    ty: usize,
+    enter_x: usize,
+    ascii: bool,
+) {
+    let bar = if ascii { '-' } else { '─' };
+    let vbar = if ascii { '|' } else { '│' };
+    let down = ty > sy;
+    let first_right = corridor_x >= exit_x;
+    let second_right = enter_x > corridor_x;
+
+    fill_h(grid, mask, sy, exit_x, corridor_x, bar);
+    fill_v(grid, mask, corridor_x, sy, ty, vbar);
+    fill_h(grid, mask, ty, corridor_x, enter_x, bar);
+
+    if corridor_x != exit_x {
+        put_arrow(
+            grid,
+            mask,
+            corridor_x,
+            sy,
+            corner_from_horizontal(first_right, down, ascii),
+        );
+    }
+    if enter_x != corridor_x {
+        put_arrow(
+            grid,
+            mask,
+            corridor_x,
+            ty,
+            corner_from_vertical(down, second_right, ascii),
+        );
+    }
+
+    let head = if enter_x == corridor_x {
+        if down {
+            arrow_head_down(ascii)
+        } else {
+            arrow_head_up(ascii)
+        }
+    } else {
+        arrow_head(second_right, ascii)
+    };
+    put_arrow(grid, mask, enter_x, ty, head);
+}
+
+fn fill_h(grid: &mut [Vec<char>], mask: &mut [Vec<bool>], y: usize, a: usize, b: usize, ch: char) {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    for x in lo..=hi {
+        put_arrow(grid, mask, x, y, ch);
+    }
+}
+
+fn fill_v(grid: &mut [Vec<char>], mask: &mut [Vec<bool>], x: usize, a: usize, b: usize, ch: char) {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    for y in lo..=hi {
+        put_arrow(grid, mask, x, y, ch);
+    }
+}
+
+fn put_arrow(grid: &mut [Vec<char>], mask: &mut [Vec<bool>], x: usize, y: usize, ch: char) {
+    if y < grid.len() && x < grid[y].len() {
+        grid[y][x] = ch;
+        mask[y][x] = true;
+    }
+}
+
+fn corner_from_horizontal(horizontal_right: bool, vertical_down: bool, ascii: bool) -> char {
+    if ascii {
+        return '+';
+    }
+    match (horizontal_right, vertical_down) {
+        (true, true) => '┐',
+        (true, false) => '┘',
+        (false, true) => '┌',
+        (false, false) => '└',
+    }
+}
+
+fn corner_from_vertical(vertical_from_up: bool, horizontal_right: bool, ascii: bool) -> char {
+    if ascii {
+        return '+';
+    }
+    match (vertical_from_up, horizontal_right) {
+        (true, true) => '└',
+        (true, false) => '┘',
+        (false, true) => '┌',
+        (false, false) => '┐',
+    }
+}
+
+fn arrow_head(right: bool, ascii: bool) -> char {
+    match (right, ascii) {
+        (true, true) => '>',
+        (false, true) => '<',
+        (true, false) => '▶',
+        (false, false) => '◀',
+    }
+}
+
+fn arrow_head_down(ascii: bool) -> char {
+    if ascii {
+        'v'
+    } else {
+        '▼'
+    }
+}
+
+fn arrow_head_up(ascii: bool) -> char {
+    if ascii {
+        '^'
+    } else {
+        '▲'
+    }
+}
+
 fn put_str(grid: &mut [Vec<char>], x: usize, y: usize, s: &str) {
     if y >= grid.len() {
         return;
@@ -391,4 +610,82 @@ fn truncate_label(s: &str, max_len: usize) -> String {
 
 fn display_width(s: &str) -> usize {
     s.chars().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts() -> CanvasOptions {
+        CanvasOptions {
+            max_label: 36,
+            level_gap: 6,
+            row_gap: 2,
+            ascii: false,
+        }
+    }
+
+    fn sample_tree() -> TreeNode {
+        let mut root = TreeNode::new("root", "Root");
+        let mut a = TreeNode::new("a", "A");
+        a.arrow_links.push("b".to_string());
+        root.children.push(a);
+        root.children.push(TreeNode::new("b", "B"));
+        root
+    }
+
+    #[test]
+    fn arrow_links_are_drawn_and_masked() {
+        let canvas = compute_canvas(&sample_tree(), &opts());
+        let text = canvas.to_string();
+
+        assert!(text.contains('◀'), "arrowhead missing:\n{}", text);
+        assert!(canvas.arrow_mask.iter().flatten().any(|v| *v));
+        assert!(text.contains("[ A ]"));
+        assert!(text.contains("[ B ]"));
+    }
+
+    #[test]
+    fn node_labels_cover_arrow_mask() {
+        let canvas = compute_canvas(&sample_tree(), &opts());
+
+        for node in &canvas.nodes {
+            for x in node.x..(node.x + node.width) {
+                assert!(
+                    !canvas.arrow_mask[node.y][x],
+                    "arrow mask leaked into label of '{}' at ({}, {})",
+                    node.id, x, node.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_mode_uses_ascii_arrowhead() {
+        let mut options = opts();
+        options.ascii = true;
+        let canvas = compute_canvas(&sample_tree(), &options);
+        let text = canvas.to_string();
+
+        assert!(
+            text.contains('<') || text.contains('>'),
+            "ascii arrow missing:\n{}",
+            text
+        );
+    }
+
+    #[test]
+    fn arrow_to_hidden_folded_target_is_skipped() {
+        let mut root = TreeNode::new("root", "Root");
+        let mut a = TreeNode::new("a", "A");
+        a.arrow_links.push("child".to_string());
+        root.children.push(a);
+        let mut folded = TreeNode::new("hidden", "Hidden");
+        folded.folded = true;
+        folded.children.push(TreeNode::new("child", "Child"));
+        root.children.push(folded);
+
+        let canvas = compute_canvas(&root, &opts());
+        assert!(!canvas.arrow_mask.iter().flatten().any(|v| *v));
+    }
 }
