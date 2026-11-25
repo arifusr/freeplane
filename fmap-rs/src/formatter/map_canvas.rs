@@ -174,16 +174,7 @@ pub fn compute_canvas(root: &TreeNode, options: &CanvasOptions) -> CanvasData {
     let mut arrow_mask = vec![vec![false; total_width]; total_height];
 
     // Gambar edge garis konektor antar induk dan anak
-    for i in 0..layout_nodes.len() {
-        if let Some(pidx) = layout_nodes[i].parent_idx {
-            let px = layout_nodes[pidx].x + layout_nodes[pidx].width;
-            let py = layout_nodes[pidx].y;
-            let cx = layout_nodes[i].x;
-            let cy = layout_nodes[i].y;
-
-            draw_edge(&mut grid, px, py, cx, cy, options.ascii);
-        }
-    }
+    draw_tree_edges(&mut grid, &layout_nodes, options.ascii);
 
     // Gambar arrow link antar-node (bukan edge pohon). Digambar sebelum label
     // agar kotak/label node tetap utuh dan menutupi garis yang melewatinya.
@@ -356,39 +347,117 @@ fn assign_y(idx: usize, nodes: &mut [CanvasNodeInfo], row_gap: usize, next_row: 
     }
 }
 
-fn draw_edge(grid: &mut [Vec<char>], px: usize, py: usize, cx: usize, cy: usize, ascii: bool) {
-    if py == cy {
-        for x in px..cx {
-            if x < grid[py].len() {
-                grid[py][x] = if ascii { '-' } else { '─' };
+/// Gambar seluruh garis penghubung pohon sekaligus untuk setiap induk.
+///
+/// Tiap induk dihubungkan ke "trunk" vertikal di `mid_x` lewat garis horizontal
+/// pendek, lalu trunk bercabang ke masing-masing anak. Karakter persimpangan
+/// dihitung dari arah yang benar-benar terpakai agar tidak ada garis yang
+/// menggantung tanpa sambungan (mis. `┴` tanpa garis horizontal ke induk).
+fn draw_tree_edges(grid: &mut [Vec<char>], nodes: &[CanvasNodeInfo], ascii: bool) {
+    let h = if ascii { '-' } else { '─' };
+    let v = if ascii { '|' } else { '│' };
+
+    for (pidx, parent) in nodes.iter().enumerate() {
+        let children: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.parent_idx == Some(pidx))
+            .map(|(i, _)| i)
+            .collect();
+        if children.is_empty() {
+            continue;
+        }
+
+        let px = parent.x + parent.width;
+        let py = parent.y;
+
+        // Semua anak sejajar dengan induk (umumnya anak tunggal): garis lurus.
+        if children.iter().all(|&ci| nodes[ci].y == py) {
+            for &ci in &children {
+                let cx = nodes[ci].x;
+                let limit = cx.min(grid[py].len());
+                for x in px..limit {
+                    set_char(grid, x, py, h);
+                }
+            }
+            continue;
+        }
+
+        let mid_x = px + 2;
+        let top = children.iter().map(|&ci| nodes[ci].y).min().unwrap_or(py);
+        let bottom = children.iter().map(|&ci| nodes[ci].y).max().unwrap_or(py);
+
+        // Garis horizontal dari kotak induk menuju trunk.
+        let limit = mid_x.min(grid[py].len());
+        for x in px..limit {
+            set_char(grid, x, py, h);
+        }
+
+        // Trunk vertikal dari anak teratas sampai anak terbawah.
+        for y in top..=bottom {
+            set_char(grid, mid_x, y, v);
+        }
+
+        // Garis horizontal dari trunk menuju tiap anak.
+        for &ci in &children {
+            let cy = nodes[ci].y;
+            let cx = nodes[ci].x;
+            if cx > mid_x {
+                let limit = cx.min(grid[cy].len());
+                for x in (mid_x + 1)..limit {
+                    set_char(grid, x, cy, h);
+                }
             }
         }
-    } else {
-        let mid_x = px + 2;
-        if py < cy {
-            put_char(grid, mid_x, py, if ascii { '+' } else { '┬' });
-            for y in (py + 1)..cy {
-                put_char(grid, mid_x, y, if ascii { '|' } else { '│' });
-            }
-            put_char(grid, mid_x, cy, if ascii { '+' } else { '└' });
-            for x in (mid_x + 1)..cx {
-                put_char(grid, x, cy, if ascii { '-' } else { '─' });
-            }
-        } else {
-            put_char(grid, mid_x, py, if ascii { '+' } else { '┴' });
-            for y in (cy + 1)..py {
-                put_char(grid, mid_x, y, if ascii { '|' } else { '│' });
-            }
-            put_char(grid, mid_x, cy, if ascii { '+' } else { '┌' });
-            for x in (mid_x + 1)..cx {
-                put_char(grid, x, cy, if ascii { '-' } else { '─' });
-            }
+
+        // Pasang karakter persimpangan setelah semua arah diketahui.
+        let mut rows: Vec<usize> = children.iter().map(|&ci| nodes[ci].y).collect();
+        rows.push(py);
+        rows.sort_unstable();
+        rows.dedup();
+        for r in rows {
+            let up = r > top;
+            let down = r < bottom;
+            let left = r == py;
+            let right = children.iter().any(|&ci| nodes[ci].y == r);
+            let ch = junction_char(up, down, left, right, ascii);
+            set_char(grid, mid_x, r, ch);
         }
     }
 }
 
-fn put_char(grid: &mut [Vec<char>], x: usize, y: usize, ch: char) {
-    if y < grid.len() && x < grid[y].len() && grid[y][x] == ' ' {
+/// Pilih karakter box-drawing sesuai arah garis yang aktif pada satu sel.
+fn junction_char(up: bool, down: bool, left: bool, right: bool, ascii: bool) -> char {
+    if ascii {
+        return match (left || right, up || down) {
+            (true, true) => '+',
+            (true, false) => '-',
+            (false, true) => '|',
+            (false, false) => ' ',
+        };
+    }
+    match (up, down, left, right) {
+        (true, true, true, true) => '┼',
+        (true, true, true, false) => '┤',
+        (true, true, false, true) => '├',
+        (true, true, false, false) => '│',
+        (true, false, true, true) => '┴',
+        (true, false, true, false) => '┘',
+        (true, false, false, true) => '└',
+        (true, false, false, false) => '│',
+        (false, true, true, true) => '┬',
+        (false, true, true, false) => '┐',
+        (false, true, false, true) => '┌',
+        (false, true, false, false) => '│',
+        (false, false, true, true) => '─',
+        (false, false, true, false) => '─',
+        (false, false, false, true) => '─',
+        (false, false, false, false) => ' ',
+    }
+}
+
+fn set_char(grid: &mut [Vec<char>], x: usize, y: usize, ch: char) {
+    if y < grid.len() && x < grid[y].len() {
         grid[y][x] = ch;
     }
 }
@@ -687,5 +756,67 @@ mod tests {
 
         let canvas = compute_canvas(&root, &opts());
         assert!(!canvas.arrow_mask.iter().flatten().any(|v| *v));
+    }
+
+    #[test]
+    fn parent_is_connected_to_children_with_horizontal_line() {
+        let mut root = TreeNode::new("root", "Root");
+        root.children.push(TreeNode::new("a", "A"));
+        root.children.push(TreeNode::new("b", "B"));
+
+        let canvas = compute_canvas(&root, &opts());
+        let parent = &canvas.nodes[0];
+        let px = parent.x + parent.width;
+        let mid_x = px + 2;
+        let row = &canvas.grid[parent.y];
+
+        // Dua anak -> induk berada di antara keduanya, jadi persimpangan `┤`.
+        assert_eq!(row[mid_x], '┤', "junction missing:\n{}", canvas.to_string());
+        for x in px..mid_x {
+            assert_eq!(
+                row[x],
+                '─',
+                "horizontal connector missing at x={}:\n{}",
+                x,
+                canvas.to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn middle_child_uses_cross_junction() {
+        let mut root = TreeNode::new("root", "Root");
+        for (id, text) in [("a", "A"), ("b", "B"), ("c", "C")] {
+            root.children.push(TreeNode::new(id, text));
+        }
+
+        let canvas = compute_canvas(&root, &opts());
+        let parent = &canvas.nodes[0];
+        let mid_x = parent.x + parent.width + 2;
+        assert_eq!(
+            canvas.grid[parent.y][mid_x],
+            '┼',
+            "cross junction missing:\n{}",
+            canvas.to_string()
+        );
+    }
+
+    #[test]
+    fn ascii_mode_connects_parent_with_plus() {
+        let mut root = TreeNode::new("root", "Root");
+        root.children.push(TreeNode::new("a", "A"));
+        root.children.push(TreeNode::new("b", "B"));
+
+        let mut options = opts();
+        options.ascii = true;
+        let canvas = compute_canvas(&root, &options);
+        let parent = &canvas.nodes[0];
+        let mid_x = parent.x + parent.width + 2;
+        assert_eq!(
+            canvas.grid[parent.y][mid_x],
+            '+',
+            "ascii junction missing:\n{}",
+            canvas.to_string()
+        );
     }
 }
