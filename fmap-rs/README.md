@@ -100,3 +100,21 @@ label agar teks tetap utuh. Di TUI, panel info juga menampilkan arrow link kelua
 dan masuk untuk node terpilih. Tekan `r` untuk membuat link dari node terpilih
 (masukkan ID target), atau `x` untuk menghapus link keluar ke ID target tersebut.
 
+### Editor di TUI
+
+TUI juga bisa dipakai untuk mengubah isi peta tanpa keluar ke CLI:
+
+| Key | Fungsi |
+| --- | --- |
+| `c` | Tambah child di bawah node terpilih |
+| `e` | Edit teks node terpilih (prefill teks lama) |
+| `n` | Edit catatan node terpilih |
+| `Del` / `Shift+D` | Hapus node beserta seluruh subtree-nya (dengan konfirmasi) |
+| `r` / `x` | Tambah / hapus arrow link |
+
+Dialog input mendukung `←/→`, `Home/End`, `Backspace`, dan `Delete` untuk mengedit
+teks. `Enter` menyimpan, `Esc` membatalkan. Root node tidak bisa dihapus. Setelah
+setiap perubahan, peta dimuat ulang otomatis dan pesan status singkat muncul di
+bar bantuan. Catatan yang berisi beberapa baris akan ditampilkan sebagai satu baris
+saat diedit dan disimpan kembali sebagai satu baris.
+

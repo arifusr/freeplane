@@ -281,21 +281,61 @@ impl LadybugStorage {
         })
     }
 
-    pub fn delete_node(&self, node_id: &str) -> Result<()> {
+    pub fn edit_node_note(&self, node_id: &str, note: &str) -> Result<()> {
         self.with_conn(|conn| {
             let now = now_string();
-            let rel_q = format!("MATCH (a:MapNode)-[r:PARENT_OF]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", esc_cypher(node_id), esc_cypher(node_id));
-            let _ = conn.query(&rel_q);
-            let arrow_rel_q = format!("MATCH (a:MapNode)-[r:CONNECTS_TO]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", esc_cypher(node_id), esc_cypher(node_id));
-            let _ = conn.query(&arrow_rel_q);
+            let q = format!(
+                "MATCH (n:MapNode {{id: '{}'}}) SET n.note = '{}', n.updated_at = '{}'",
+                esc_cypher(node_id),
+                esc_cypher(note),
+                esc_cypher(&now)
+            );
+            conn.query(&q).context("Gagal update catatan node")?;
 
             touch_map_of_node(conn, node_id, &now);
 
-            let node_q = format!(
-                "MATCH (n:MapNode {{id: '{}'}}) DELETE n",
-                esc_cypher(node_id)
-            );
-            conn.query(&node_q).context("Gagal delete node")?;
+            Ok(())
+        })
+    }
+
+    pub fn delete_node(&self, node_id: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            let now = now_string();
+
+            // Kumpulkan seluruh descendant agar subtree tidak tertinggal sebagai
+            // node yatim (orphan) di database.
+            let mut ids = vec![node_id.to_string()];
+            let mut cursor = 0;
+            while cursor < ids.len() {
+                let child_q = format!(
+                    "MATCH (p:MapNode {{id: '{}'}})-[:PARENT_OF]->(c:MapNode) RETURN c.id",
+                    esc_cypher(&ids[cursor])
+                );
+                if let Ok(mut res) = conn.query(&child_q) {
+                    for row in &mut res {
+                        if let Some(value) = row.get(0) {
+                            let child_id = val_to_string(value);
+                            if !child_id.is_empty() && !ids.contains(&child_id) {
+                                ids.push(child_id);
+                            }
+                        }
+                    }
+                }
+                cursor += 1;
+            }
+
+            touch_map_of_node(conn, node_id, &now);
+
+            for id in &ids {
+                let escaped = esc_cypher(id);
+                let rel_q = format!("MATCH (a:MapNode)-[r:PARENT_OF]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", escaped, escaped);
+                let _ = conn.query(&rel_q);
+                let arrow_rel_q = format!("MATCH (a:MapNode)-[r:CONNECTS_TO]->(b:MapNode) WHERE a.id = '{}' OR b.id = '{}' DELETE r", escaped, escaped);
+                let _ = conn.query(&arrow_rel_q);
+
+                let node_q = format!("MATCH (n:MapNode {{id: '{}'}}) DELETE n", escaped);
+                conn.query(&node_q).context("Gagal delete node")?;
+            }
 
             Ok(())
         })

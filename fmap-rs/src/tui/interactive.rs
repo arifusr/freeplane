@@ -6,7 +6,9 @@ use crate::storage::LadybugStorage;
 use anyhow::Result;
 use chrono::{Local, NaiveDateTime, TimeZone, Utc};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -29,10 +31,137 @@ struct FlatItem<'a> {
 }
 
 #[derive(Clone, Debug)]
-enum ArrowPromptAction {
-    Add { source_id: String },
-    Remove { source_id: String },
+enum PromptAction {
+    AddLink { source_id: String },
+    RemoveLink { source_id: String },
+    AddChild { parent_id: String },
+    EditText { node_id: String },
+    EditNote { node_id: String },
 }
+
+/// Input teks satu baris dengan dukungan pergerakan kursor.
+#[derive(Clone, Debug)]
+struct TextInput {
+    value: String,
+    /// Posisi kursor dalam satuan karakter (bukan byte).
+    cursor: usize,
+}
+
+impl TextInput {
+    fn new(value: impl Into<String>) -> Self {
+        let value = value.into();
+        let cursor = value.chars().count();
+        Self { value, cursor }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    fn len_chars(&self) -> usize {
+        self.value.chars().count()
+    }
+
+    fn byte_index(&self, char_idx: usize) -> usize {
+        self.value
+            .char_indices()
+            .nth(char_idx)
+            .map(|(idx, _)| idx)
+            .unwrap_or(self.value.len())
+    }
+
+    fn insert_char(&mut self, ch: char) {
+        let idx = self.byte_index(self.cursor);
+        self.value.insert(idx, ch);
+        self.cursor += 1;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let start = self.byte_index(self.cursor - 1);
+        let end = self.byte_index(self.cursor);
+        self.value.replace_range(start..end, "");
+        self.cursor -= 1;
+    }
+
+    fn delete(&mut self) {
+        if self.cursor >= self.len_chars() {
+            return;
+        }
+        let start = self.byte_index(self.cursor);
+        let end = self.byte_index(self.cursor + 1);
+        self.value.replace_range(start..end, "");
+    }
+
+    fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn move_right(&mut self) {
+        if self.cursor < self.len_chars() {
+            self.cursor += 1;
+        }
+    }
+
+    fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.cursor = self.len_chars();
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PromptState {
+    action: PromptAction,
+    input: TextInput,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct DeleteConfirm {
+    node_id: String,
+    text: String,
+    descendant_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct StatusMessage {
+    text: String,
+    at: Instant,
+    is_error: bool,
+}
+
+fn status_ok(text: impl Into<String>) -> StatusMessage {
+    StatusMessage {
+        text: text.into(),
+        at: Instant::now(),
+        is_error: false,
+    }
+}
+
+fn status_err(text: impl Into<String>) -> StatusMessage {
+    StatusMessage {
+        text: text.into(),
+        at: Instant::now(),
+        is_error: true,
+    }
+}
+
+struct ApplyOutcome {
+    selected_id: Option<String>,
+    message: String,
+}
+
+enum PromptError {
+    Validation(String),
+    Storage(anyhow::Error),
+}
+
+const STATUS_TTL: Duration = Duration::from_secs(4);
 
 pub fn run_interactive_tui(
     storage: &LadybugStorage,
@@ -72,7 +201,9 @@ fn tui_loop<B: ratatui::backend::Backend>(
     let mut is_canvas_mode = start_canvas;
     let mut selected_id = tree.id.clone();
     let mut info_scroll: u16 = 0;
-    let mut link_prompt: Option<(ArrowPromptAction, String)> = None;
+    let mut prompt: Option<PromptState> = None;
+    let mut delete_confirm: Option<DeleteConfirm> = None;
+    let mut status: Option<StatusMessage> = None;
     let mut pan_x: usize = 0;
     let mut pan_y: usize = 0;
 
@@ -94,6 +225,14 @@ fn tui_loop<B: ratatui::backend::Backend>(
             }
         }
 
+        if status
+            .as_ref()
+            .map(|message| message.at.elapsed() >= STATUS_TTL)
+            .unwrap_or(false)
+        {
+            status = None;
+        }
+
         let canvas_data = compute_canvas(tree, &canvas_opts);
         let visible_nodes = flatten_visible(tree, 0, None);
 
@@ -109,7 +248,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(5), Constraint::Length(3)])
+                .constraints([Constraint::Min(5), Constraint::Length(4)])
                 .split(f.area());
 
             let main_chunks = Layout::default()
@@ -371,136 +510,322 @@ fn tui_loop<B: ratatui::backend::Backend>(
             f.render_widget(right_p, main_chunks[1]);
 
             // Bottom Status & Help Bar
-            let help_text = if is_canvas_mode {
-                vec![
-                    Span::styled(" [q] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+            let navigation_help = if is_canvas_mode {
+                Line::from(vec![
+                    key_hint("[q]"),
                     Span::raw(" Keluar  "),
-                    Span::styled(" [v] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    key_hint("[v]"),
                     Span::raw(" Mode Tree  "),
-                    Span::styled(
-                        " [←↑↓→ / WASD] ",
-                        Style::default().fg(Color::Black).bg(Color::Yellow),
-                    ),
-                    Span::raw(" Sorot Node (Highlight)  "),
-                    Span::styled(
-                        " [Space] ",
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
-                    ),
+                    key_hint("[←↑↓→ / WASD]"),
+                    Span::raw(" Sorot  "),
+                    key_hint("[Space]"),
                     Span::raw(" Lipat  "),
-                    Span::styled(
-                        " [PgUp/PgDn] ",
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
-                    ),
-                    Span::raw(" Scroll Info  "),
-                    Span::styled(" [0] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    key_hint("[PgUp/PgDn]"),
+                    Span::raw(" Info  "),
+                    key_hint("[0]"),
                     Span::raw(" Reset Pan"),
-                    Span::styled(" [r/x] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-                    Span::raw(" Tambah/Hapus Arrow"),
-                ]
+                ])
             } else {
-                vec![
-                    Span::styled(" [q] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                Line::from(vec![
+                    key_hint("[q]"),
                     Span::raw(" Keluar  "),
-                    Span::styled(" [v] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    key_hint("[v]"),
                     Span::raw(" Mode 2D Canvas  "),
-                    Span::styled(" [↑/↓] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-                    Span::raw(" Pilih Node  "),
-                    Span::styled(" [←/→] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+                    key_hint("[↑/↓]"),
+                    Span::raw(" Pilih  "),
+                    key_hint("[←/→]"),
                     Span::raw(" Induk/Anak  "),
-                    Span::styled(
-                        " [Space] ",
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
-                    ),
+                    key_hint("[Space]"),
                     Span::raw(" Lipat  "),
-                    Span::styled(
-                        " [PgUp/PgDn] ",
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
-                    ),
-                    Span::raw(" Scroll Info  "),
-                    Span::styled(" [r/x] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-                    Span::raw(" Tambah/Hapus Arrow"),
-                ]
+                    key_hint("[PgUp/PgDn]"),
+                    Span::raw(" Scroll Info"),
+                ])
             };
+            let edit_help = Line::from(vec![
+                key_hint("[c]"),
+                Span::raw(" Tambah Child  "),
+                key_hint("[e]"),
+                Span::raw(" Edit Teks  "),
+                key_hint("[n]"),
+                Span::raw(" Catatan  "),
+                key_hint("[Del]"),
+                Span::raw(" Hapus Node  "),
+                key_hint("[r/x]"),
+                Span::raw(" Arrow Link"),
+            ]);
+            let status_line = status.as_ref().map(|message| {
+                Line::from(Span::styled(
+                    message.text.clone(),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(if message.is_error {
+                            Color::Red
+                        } else {
+                            Color::Green
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ))
+            });
 
             let help_block = Block::default()
                 .borders(Borders::ALL)
+                .title(Span::styled(
+                    " Bantuan ",
+                    Style::default().fg(Color::DarkGray),
+                ))
                 .border_style(Style::default().fg(Color::DarkGray));
-            let help_p = Paragraph::new(Line::from(help_text)).block(help_block);
+            let help_p = Paragraph::new(vec![navigation_help, status_line.unwrap_or(edit_help)])
+                .block(help_block);
             f.render_widget(help_p, chunks[1]);
 
-            if let Some((action, input)) = &link_prompt {
-                let area = centered_rect(60, 20, f.area());
+            if let Some(prompt_state) = &prompt {
+                let area = centered_rect_fixed(modal_width(f.area()), 10, f.area());
                 f.render_widget(Clear, area);
-                let action_text = match action {
-                    ArrowPromptAction::Add { source_id } => {
-                        format!("Dari [{}], ID target arrow link baru:", source_id)
-                    }
-                    ArrowPromptAction::Remove { source_id } => {
-                        format!("Dari [{}], ID target arrow link yang dihapus:", source_id)
-                    }
-                };
-                let prompt = Paragraph::new(vec![
-                    Line::from(action_text),
-                    Line::from(input.as_str()),
-                    Line::from("Enter: konfirmasi | Esc: batal"),
-                ])
-                .block(
-                    Block::default()
-                        .title(" Arrow Link ")
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
-                );
-                f.render_widget(prompt, area);
+                let (title, description) = prompt_header(&prompt_state.action, tree);
+                let mut lines = vec![
+                    Line::from(Span::styled(description, Style::default().fg(Color::White))),
+                    Line::from(""),
+                    input_line(&prompt_state.input),
+                ];
+                if let Some(ref error) = prompt_state.error {
+                    lines.push(Line::from(Span::styled(
+                        error.clone(),
+                        Style::default().fg(Color::Red),
+                    )));
+                } else {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    "Enter: simpan | Esc: batal | ←/→/Home/End: geser kursor",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                let dialog = Paragraph::new(lines)
+                    .block(
+                        Block::default()
+                            .title(format!(" {} ", title))
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Cyan)),
+                    )
+                    .wrap(Wrap { trim: false });
+                f.render_widget(dialog, area);
+            }
+
+            if let Some(confirm) = &delete_confirm {
+                let area = centered_rect_fixed(modal_width(f.area()), 9, f.area());
+                f.render_widget(Clear, area);
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::styled("Hapus node ", Style::default().fg(Color::White)),
+                        Span::styled(confirm.node_id.as_str(), Style::default().fg(Color::Yellow)),
+                        Span::styled("?", Style::default().fg(Color::White)),
+                    ]),
+                    Line::from(Span::styled(
+                        confirm.text.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(""),
+                ];
+                if confirm.descendant_count > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "⚠ Node ini punya {} turunan; seluruh subtree ikut terhapus.",
+                            confirm.descendant_count
+                        ),
+                        Style::default().fg(Color::Red),
+                    )));
+                } else {
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    "y/Enter: hapus | n/Esc: batal",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                let dialog = Paragraph::new(lines)
+                    .block(
+                        Block::default()
+                            .title(" Konfirmasi Hapus ")
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Red)),
+                    )
+                    .wrap(Wrap { trim: false });
+                f.render_widget(dialog, area);
             }
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                let mut prompt_handled = false;
-                let mut submitted_target = None;
-                if link_prompt.is_some() {
-                    prompt_handled = true;
-                    if let Some((_, input)) = link_prompt.as_mut() {
-                        match key.code {
-                            KeyCode::Esc => link_prompt = None,
-                            KeyCode::Enter => submitted_target = Some(input.clone()),
-                            KeyCode::Backspace => {
-                                input.pop();
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
+                        break;
+                    }
+                    continue;
+                }
+
+                // Dialog konfirmasi hapus node
+                if let Some(confirm) = delete_confirm.take() {
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            let parent_id = flatten_visible(tree, 0, None)
+                                .iter()
+                                .find(|item| item.node.id == confirm.node_id)
+                                .and_then(|item| item.parent_id.clone());
+
+                            match storage.delete_node(&confirm.node_id) {
+                                Ok(()) => match storage.load_tree(map_id) {
+                                    Ok(fresh_tree) => {
+                                        *tree = fresh_tree;
+                                        selected_id = parent_id
+                                            .filter(|pid| find_node_by_id(tree, pid).is_some())
+                                            .unwrap_or_else(|| tree.id.clone());
+                                        info_scroll = 0;
+                                        status = Some(status_ok(format!(
+                                            "Node [{}] beserta subtree-nya dihapus.",
+                                            confirm.node_id
+                                        )));
+                                    }
+                                    Err(err) => {
+                                        status = Some(status_err(format!(
+                                            "Gagal memuat ulang peta: {}",
+                                            err
+                                        )));
+                                    }
+                                },
+                                Err(err) => {
+                                    status =
+                                        Some(status_err(format!("Gagal menghapus node: {}", err)));
+                                }
                             }
-                            KeyCode::Char(ch) => input.push(ch),
+                        }
+                        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {}
+                        _ => {
+                            // Tombol lain tidak menutup dialog konfirmasi
+                            delete_confirm = Some(confirm);
+                        }
+                    }
+                    continue;
+                }
+
+                // Input prompt teks (tambah child, edit teks/catatan, arrow link)
+                if prompt.is_some() {
+                    let mut close_prompt = false;
+                    let mut submit = false;
+
+                    if let Some(prompt_state) = prompt.as_mut() {
+                        match key.code {
+                            KeyCode::Esc => close_prompt = true,
+                            KeyCode::Enter => submit = true,
+                            KeyCode::Backspace => prompt_state.input.backspace(),
+                            KeyCode::Delete => prompt_state.input.delete(),
+                            KeyCode::Left => prompt_state.input.move_left(),
+                            KeyCode::Right => prompt_state.input.move_right(),
+                            KeyCode::Home => prompt_state.input.move_home(),
+                            KeyCode::End => prompt_state.input.move_end(),
+                            KeyCode::Char(ch) => prompt_state.input.insert_char(ch),
                             _ => {}
                         }
                     }
-                    if let Some(target_id) = submitted_target {
-                        if let Some((action, _)) = link_prompt.take() {
-                            if !target_id.trim().is_empty() {
-                                match action {
-                                    ArrowPromptAction::Add { source_id } => {
-                                        storage.add_arrow_link(
-                                            map_id,
-                                            &source_id,
-                                            target_id.trim(),
-                                        )?;
+
+                    if close_prompt {
+                        prompt = None;
+                        continue;
+                    }
+
+                    if submit {
+                        if let Some(mut prompt_state) = prompt.take() {
+                            let applied = apply_prompt(
+                                storage,
+                                map_id,
+                                tree,
+                                &prompt_state.action,
+                                prompt_state.input.as_str(),
+                            );
+
+                            match applied {
+                                Ok(outcome) => match storage.load_tree(map_id) {
+                                    Ok(fresh_tree) => {
+                                        *tree = fresh_tree;
+                                        if let Some(new_id) = outcome.selected_id {
+                                            selected_id = new_id;
+                                        }
+                                        if find_node_by_id(tree, &selected_id).is_none() {
+                                            selected_id = tree.id.clone();
+                                        }
+                                        info_scroll = 0;
+                                        status = Some(status_ok(outcome.message));
                                     }
-                                    ArrowPromptAction::Remove { source_id } => {
-                                        storage.remove_arrow_link(
-                                            map_id,
-                                            &source_id,
-                                            target_id.trim(),
-                                        )?;
+                                    Err(err) => {
+                                        status = Some(status_err(format!(
+                                            "Gagal memuat ulang peta: {}",
+                                            err
+                                        )));
                                     }
+                                },
+                                Err(PromptError::Validation(message)) => {
+                                    prompt_state.error = Some(message);
+                                    prompt = Some(prompt_state);
                                 }
-                                *tree = storage.load_tree(map_id)?;
-                                info_scroll = 0;
+                                Err(PromptError::Storage(err)) => {
+                                    prompt_state.error = Some(format!("Gagal menyimpan: {}", err));
+                                    prompt = Some(prompt_state);
+                                }
                             }
                         }
                     }
-                }
-                if prompt_handled {
                     continue;
                 }
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('c') => {
+                        prompt = Some(PromptState {
+                            action: PromptAction::AddChild {
+                                parent_id: selected_id.clone(),
+                            },
+                            input: TextInput::new(""),
+                            error: None,
+                        });
+                    }
+                    KeyCode::Char('e') => {
+                        if let Some(node) = find_node_by_id(tree, &selected_id) {
+                            prompt = Some(PromptState {
+                                action: PromptAction::EditText {
+                                    node_id: node.id.clone(),
+                                },
+                                input: TextInput::new(node.text.clone()),
+                                error: None,
+                            });
+                        }
+                    }
+                    KeyCode::Char('n') => {
+                        if let Some(node) = find_node_by_id(tree, &selected_id) {
+                            let note = node.note.clone().unwrap_or_default().replace('\n', " ");
+                            prompt = Some(PromptState {
+                                action: PromptAction::EditNote {
+                                    node_id: node.id.clone(),
+                                },
+                                input: TextInput::new(note),
+                                error: None,
+                            });
+                        }
+                    }
+                    KeyCode::Delete | KeyCode::Char('D') => {
+                        if selected_id == tree.id {
+                            status = Some(status_err("Root node tidak bisa dihapus."));
+                        } else if let Some(node) = find_node_by_id(tree, &selected_id) {
+                            let descendant_count = node.count_nodes().saturating_sub(1);
+                            delete_confirm = Some(DeleteConfirm {
+                                node_id: node.id.clone(),
+                                text: node.text.clone(),
+                                descendant_count,
+                            });
+                        }
+                    }
                     KeyCode::Char('v') => {
                         is_canvas_mode = !is_canvas_mode;
                     }
@@ -509,20 +834,22 @@ fn tui_loop<B: ratatui::backend::Backend>(
                         pan_y = 0;
                     }
                     KeyCode::Char('r') => {
-                        link_prompt = Some((
-                            ArrowPromptAction::Add {
+                        prompt = Some(PromptState {
+                            action: PromptAction::AddLink {
                                 source_id: selected_id.clone(),
                             },
-                            String::new(),
-                        ));
+                            input: TextInput::new(""),
+                            error: None,
+                        });
                     }
                     KeyCode::Char('x') => {
-                        link_prompt = Some((
-                            ArrowPromptAction::Remove {
+                        prompt = Some(PromptState {
+                            action: PromptAction::RemoveLink {
                                 source_id: selected_id.clone(),
                             },
-                            String::new(),
-                        ));
+                            input: TextInput::new(""),
+                            error: None,
+                        });
                     }
                     KeyCode::Char(' ') => {
                         if let Some(new_folded) = toggle_fold(tree, &selected_id) {
@@ -648,23 +975,181 @@ fn tui_loop<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+fn modal_width(area: Rect) -> u16 {
+    let preferred = (area.width as u32 * 3 / 5) as u16;
+    preferred.max(40).min(area.width.saturating_sub(2).max(20))
+}
+
+fn key_hint(label: &str) -> Span<'static> {
+    Span::styled(
+        label.to_string(),
+        Style::default().fg(Color::Black).bg(Color::Cyan),
+    )
+}
+
+fn input_line(input: &TextInput) -> Line<'static> {
+    let chars: Vec<char> = input.value.chars().collect();
+    let cursor = input.cursor.min(chars.len());
+
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::DarkGray))];
+    spans.push(Span::styled(
+        chars[..cursor].iter().collect::<String>(),
+        Style::default().fg(Color::White),
+    ));
+    if cursor < chars.len() {
+        spans.push(Span::styled(
+            chars[cursor].to_string(),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            chars[cursor + 1..].iter().collect::<String>(),
+            Style::default().fg(Color::White),
+        ));
+    } else {
+        spans.push(Span::styled(" ", Style::default().bg(Color::Cyan)));
+    }
+    Line::from(spans)
+}
+
+fn prompt_header(action: &PromptAction, tree: &TreeNode) -> (String, String) {
+    match action {
+        PromptAction::AddLink { source_id } => (
+            "Arrow Link".to_string(),
+            format!("Dari [{}], masukkan ID target arrow link baru:", source_id),
+        ),
+        PromptAction::RemoveLink { source_id } => (
+            "Hapus Arrow Link".to_string(),
+            format!(
+                "Dari [{}], masukkan ID target arrow link yang dihapus:",
+                source_id
+            ),
+        ),
+        PromptAction::AddChild { parent_id } => {
+            let parent_text = find_node_by_id(tree, parent_id)
+                .map(|node| node.text.as_str())
+                .unwrap_or("(node tidak ditemukan)");
+            (
+                "Tambah Child".to_string(),
+                format!(
+                    "Induk [{}] \"{}\". Masukkan teks cabang baru:",
+                    parent_id, parent_text
+                ),
+            )
+        }
+        PromptAction::EditText { node_id } => (
+            "Edit Teks Node".to_string(),
+            format!("Node [{}]. Masukkan teks baru:", node_id),
+        ),
+        PromptAction::EditNote { node_id } => (
+            "Edit Catatan Node".to_string(),
+            format!(
+                "Node [{}]. Masukkan catatan baru (kosongkan untuk menghapus):",
+                node_id
+            ),
+        ),
+    }
+}
+
+fn apply_prompt(
+    storage: &LadybugStorage,
+    map_id: &str,
+    tree: &TreeNode,
+    action: &PromptAction,
+    raw_input: &str,
+) -> Result<ApplyOutcome, PromptError> {
+    match action {
+        PromptAction::AddLink { source_id } => {
+            let target_id = raw_input.trim();
+            if target_id.is_empty() {
+                return Err(PromptError::Validation(
+                    "ID target tidak boleh kosong.".to_string(),
+                ));
+            }
+            storage
+                .add_arrow_link(map_id, source_id, target_id)
+                .map_err(PromptError::Storage)?;
+            Ok(ApplyOutcome {
+                selected_id: None,
+                message: format!("Arrow link {} → {} dibuat.", source_id, target_id),
+            })
+        }
+        PromptAction::RemoveLink { source_id } => {
+            let target_id = raw_input.trim();
+            if target_id.is_empty() {
+                return Err(PromptError::Validation(
+                    "ID target tidak boleh kosong.".to_string(),
+                ));
+            }
+            storage
+                .remove_arrow_link(map_id, source_id, target_id)
+                .map_err(PromptError::Storage)?;
+            Ok(ApplyOutcome {
+                selected_id: None,
+                message: format!("Arrow link {} → {} dihapus.", source_id, target_id),
+            })
+        }
+        PromptAction::AddChild { parent_id } => {
+            let text = raw_input.trim();
+            if text.is_empty() {
+                return Err(PromptError::Validation(
+                    "Teks cabang tidak boleh kosong.".to_string(),
+                ));
+            }
+            if find_node_by_id(tree, parent_id)
+                .map(|node| node.folded)
+                .unwrap_or(false)
+            {
+                storage
+                    .update_node_folded(parent_id, false)
+                    .map_err(PromptError::Storage)?;
+            }
+            let new_id = storage
+                .add_node(map_id, parent_id, text)
+                .map_err(PromptError::Storage)?;
+            Ok(ApplyOutcome {
+                selected_id: Some(new_id),
+                message: format!("Cabang \"{}\" ditambahkan.", text),
+            })
+        }
+        PromptAction::EditText { node_id } => {
+            let text = raw_input.trim();
+            if text.is_empty() {
+                return Err(PromptError::Validation(
+                    "Teks node tidak boleh kosong.".to_string(),
+                ));
+            }
+            storage
+                .edit_node(node_id, text)
+                .map_err(PromptError::Storage)?;
+            Ok(ApplyOutcome {
+                selected_id: None,
+                message: "Teks node diperbarui.".to_string(),
+            })
+        }
+        PromptAction::EditNote { node_id } => {
+            storage
+                .edit_node_note(node_id, raw_input.trim())
+                .map_err(PromptError::Storage)?;
+            Ok(ApplyOutcome {
+                selected_id: None,
+                message: "Catatan node diperbarui.".to_string(),
+            })
+        }
+    }
 }
 
 fn collect_incoming_arrow_links<'a>(
@@ -888,5 +1373,42 @@ mod tests {
             collect_incoming_arrow_links(&root, "target"),
             vec![("source", "Source")]
         );
+    }
+
+    #[test]
+    fn text_input_edits_at_cursor_position() {
+        let mut input = TextInput::new("halo");
+        assert_eq!(input.cursor, 4);
+
+        input.insert_char('!');
+        assert_eq!(input.as_str(), "halo!");
+
+        input.move_left();
+        input.move_left();
+        input.insert_char('X');
+        assert_eq!(input.as_str(), "halXo!");
+
+        input.backspace();
+        assert_eq!(input.as_str(), "halo!");
+
+        input.move_home();
+        input.delete();
+        assert_eq!(input.as_str(), "alo!");
+
+        input.move_end();
+        input.delete();
+        assert_eq!(input.as_str(), "alo!");
+    }
+
+    #[test]
+    fn text_input_handles_multibyte_characters() {
+        let mut input = TextInput::new("peta");
+        input.insert_char('🗺');
+        input.move_home();
+        input.move_right();
+        input.backspace();
+        input.insert_char('é');
+
+        assert_eq!(input.as_str(), "éeta🗺");
     }
 }
