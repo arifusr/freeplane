@@ -1,5 +1,7 @@
+use crate::cli::GraphicsMode;
 use crate::formatter::{
-    compute_canvas, find_canvas_neighbor, CanvasData, CanvasNodeInfo, CanvasOptions,
+    compute_canvas, find_canvas_neighbor, render_canvas_image, CanvasData, CanvasNodeInfo,
+    CanvasOptions,
 };
 use crate::model::TreeNode;
 use crate::storage::LadybugStorage;
@@ -20,6 +22,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Terminal,
 };
+use ratatui_image::{
+    picker::{Picker, ProtocolType},
+    protocol::StatefulProtocol,
+    FilterType, Resize, StatefulImage,
+};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -168,8 +177,23 @@ pub fn run_interactive_tui(
     storage: &LadybugStorage,
     map_id: &str,
     start_canvas: bool,
+    graphics_mode: GraphicsMode,
+    cell_size: (u16, u16),
 ) -> Result<()> {
     let mut tree = storage.load_tree(map_id)?;
+
+    // Resolve the graphics protocol without querying stdin. Terminal queries
+    // can leak a reader thread that swallows the first keypress, so detection
+    // is environment based and can be overridden with `--graphics`.
+    let protocol = resolve_graphics_protocol(graphics_mode);
+    let mut picker = Picker::from_fontsize((cell_size.0.max(1), cell_size.1.max(1)));
+    picker.set_protocol_type(protocol);
+    let start_graphics = match graphics_mode {
+        GraphicsMode::Ascii => false,
+        GraphicsMode::Auto => !matches!(protocol, ProtocolType::Halfblocks),
+        _ => true,
+    };
+    let ascii_hint = start_canvas && graphics_mode == GraphicsMode::Auto && !start_graphics;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -178,7 +202,18 @@ pub fn run_interactive_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = tui_loop(&mut terminal, storage, &mut tree, map_id, start_canvas);
+    let res = tui_loop(
+        &mut terminal,
+        storage,
+        &mut tree,
+        map_id,
+        start_canvas,
+        GraphicsSetup {
+            picker,
+            start_graphics,
+            ascii_hint,
+        },
+    );
 
     // Restore terminal
     disable_raw_mode()?;
@@ -192,21 +227,48 @@ pub fn run_interactive_tui(
     res
 }
 
+struct GraphicsSetup {
+    picker: Picker,
+    start_graphics: bool,
+    ascii_hint: bool,
+}
+
 fn tui_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     storage: &LadybugStorage,
     tree: &mut TreeNode,
     map_id: &str,
     start_canvas: bool,
+    graphics: GraphicsSetup,
 ) -> Result<()> {
+    let GraphicsSetup {
+        picker,
+        start_graphics,
+        ascii_hint,
+    } = graphics;
+    let graphics_protocol = picker.protocol_type();
+    let (cell_width, cell_height) = {
+        let (w, h) = picker.font_size();
+        (w.max(1), h.max(1))
+    };
+
     let mut is_canvas_mode = start_canvas;
+    let mut is_graphics_mode = start_graphics;
     let mut selected_id = tree.id.clone();
     let mut info_scroll: u16 = 0;
     let mut prompt: Option<PromptState> = None;
     let mut delete_confirm: Option<DeleteConfirm> = None;
-    let mut status: Option<StatusMessage> = None;
+    let mut status: Option<StatusMessage> = if ascii_hint {
+        Some(status_ok(
+            "Terminal tidak terdeteksi mendukung grafis; memakai canvas ASCII. Tekan g untuk halfblocks, atau jalankan dengan --graphics sixel/kitty.",
+        ))
+    } else {
+        None
+    };
     let mut pan_x: usize = 0;
     let mut pan_y: usize = 0;
+    // Cached encoded image; invalidated when the tree, selection or viewport changes.
+    let mut image_cache: Option<(u64, StatefulProtocol)> = None;
 
     let refresh_interval = Duration::from_millis(500);
     let mut last_refresh = Instant::now();
@@ -286,9 +348,14 @@ fn tui_loop<B: ratatui::backend::Backend>(
 
             // Panel Kiri: Peta (Outliner Tree atau Mindmap 2D Canvas)
             let left_title = if is_canvas_mode {
+                let renderer = if is_graphics_mode {
+                    protocol_label(graphics_protocol)
+                } else {
+                    "ASCII"
+                };
                 format!(
-                    " 🧠 Mindmap 2D Canvas [Peta: {}] (Posisi: x={}, y={}) ",
-                    map_id, pan_x, pan_y
+                    " 🧠 Mindmap 2D Canvas [{}] [Peta: {}] (x={}, y={}) ",
+                    renderer, map_id, pan_x, pan_y
                 )
             } else {
                 format!(" 🌳 Outliner Tree View [Peta: {}] ", map_id)
@@ -305,10 +372,59 @@ fn tui_loop<B: ratatui::backend::Backend>(
                 .border_style(Style::default().fg(Color::DarkGray));
 
             if is_canvas_mode {
-                let lines =
-                    render_canvas_viewport(&canvas_data, Some(&selected_id), pan_x, pan_y, vw, vh);
-                let p = Paragraph::new(lines).block(left_block);
-                f.render_widget(p, left_chunk);
+                if is_graphics_mode {
+                    f.render_widget(left_block, left_chunk);
+
+                    let inner = Rect {
+                        x: left_chunk.x.saturating_add(1),
+                        y: left_chunk.y.saturating_add(1),
+                        width: left_chunk.width.saturating_sub(2),
+                        height: left_chunk.height.saturating_sub(2),
+                    };
+                    if inner.width > 0 && inner.height > 0 {
+                        let key = canvas_image_key(
+                            &canvas_data,
+                            Some(&selected_id),
+                            pan_x,
+                            pan_y,
+                            inner.width as usize,
+                            inner.height as usize,
+                            cell_width,
+                            cell_height,
+                        );
+                        if image_cache.as_ref().map(|(cached, _)| *cached) != Some(key) {
+                            let img = render_canvas_image(
+                                &canvas_data,
+                                Some(&selected_id),
+                                pan_x,
+                                pan_y,
+                                inner.width as usize,
+                                inner.height as usize,
+                                cell_width,
+                                cell_height,
+                            );
+                            let protocol =
+                                picker.new_resize_protocol(image::DynamicImage::ImageRgba8(img));
+                            image_cache = Some((key, protocol));
+                        }
+                        if let Some((_, protocol)) = image_cache.as_mut() {
+                            let widget = StatefulImage::default()
+                                .resize(Resize::Fit(Some(FilterType::Triangle)));
+                            f.render_stateful_widget(widget, inner, protocol);
+                        }
+                    }
+                } else {
+                    let lines = render_canvas_viewport(
+                        &canvas_data,
+                        Some(&selected_id),
+                        pan_x,
+                        pan_y,
+                        vw,
+                        vh,
+                    );
+                    let p = Paragraph::new(lines).block(left_block);
+                    f.render_widget(p, left_chunk);
+                }
             } else {
                 let selected_idx = visible_nodes
                     .iter()
@@ -523,6 +639,8 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::raw(" Lipat  "),
                     key_hint("[PgUp/PgDn]"),
                     Span::raw(" Info  "),
+                    key_hint("[g]"),
+                    Span::raw(" Grafis/ASCII  "),
                     key_hint("[0]"),
                     Span::raw(" Reset Pan"),
                 ])
@@ -846,6 +964,26 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('v') => {
                         is_canvas_mode = !is_canvas_mode;
+                        // Force a full repaint so sixel/kitty image artifacts are cleared.
+                        let _ = terminal.clear();
+                    }
+                    KeyCode::Char('g') => {
+                        if is_canvas_mode {
+                            is_graphics_mode = !is_graphics_mode;
+                            let _ = terminal.clear();
+                            status = Some(status_ok(if is_graphics_mode {
+                                format!(
+                                    "Canvas grafis aktif ({}). Tekan g untuk kembali ke ASCII.",
+                                    protocol_label(graphics_protocol)
+                                )
+                            } else {
+                                "Canvas ASCII aktif. Tekan g untuk mode grafis.".to_string()
+                            }));
+                        } else {
+                            status = Some(status_ok(
+                                "Tekan v untuk masuk Canvas 2D, lalu g untuk memilih renderer.",
+                            ));
+                        }
                     }
                     KeyCode::Char('0') => {
                         pan_x = 0;
@@ -1025,6 +1163,102 @@ fn tui_loop<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+fn protocol_label(protocol: ProtocolType) -> &'static str {
+    match protocol {
+        ProtocolType::Halfblocks => "halfblocks",
+        ProtocolType::Sixel => "sixel",
+        ProtocolType::Kitty => "kitty",
+        ProtocolType::Iterm2 => "iTerm2",
+    }
+}
+
+fn resolve_graphics_protocol(mode: GraphicsMode) -> ProtocolType {
+    match mode {
+        GraphicsMode::Auto => detect_graphics_protocol_from_env(),
+        GraphicsMode::Ascii | GraphicsMode::Halfblocks => ProtocolType::Halfblocks,
+        GraphicsMode::Sixel => ProtocolType::Sixel,
+        GraphicsMode::Kitty => ProtocolType::Kitty,
+        GraphicsMode::Iterm2 => ProtocolType::Iterm2,
+    }
+}
+
+/// Best-effort detection without writing/reading terminal queries.
+fn detect_graphics_protocol_from_env() -> ProtocolType {
+    let term = std::env::var("TERM")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let term_program = std::env::var("TERM_PROGRAM")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let lc_terminal = std::env::var("LC_TERMINAL")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if std::env::var_os("KITTY_WINDOW_ID").is_some() || term.contains("kitty") {
+        return ProtocolType::Kitty;
+    }
+
+    // Terminals that implement the iTerm2 inline-image protocol.
+    if [
+        "iterm", "wezterm", "mintty", "vscode", "tabby", "hyper", "rio",
+    ]
+    .iter()
+    .any(|name| term_program.contains(name))
+        || lc_terminal.contains("iterm")
+    {
+        return ProtocolType::Iterm2;
+    }
+
+    if term.contains("sixel")
+        || term.contains("mlterm")
+        || term.contains("foot")
+        || term.contains("wezterm")
+    {
+        return ProtocolType::Sixel;
+    }
+
+    // Unknown terminal (including most tmux setups): halfblocks is safe.
+    ProtocolType::Halfblocks
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canvas_image_key(
+    canvas: &CanvasData,
+    selected_id: Option<&str>,
+    pan_x: usize,
+    pan_y: usize,
+    view_width: usize,
+    view_height: usize,
+    cell_width: u16,
+    cell_height: u16,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    canvas.width.hash(&mut hasher);
+    canvas.height.hash(&mut hasher);
+    for node in &canvas.nodes {
+        node.id.hash(&mut hasher);
+        node.label.hash(&mut hasher);
+        node.marker.hash(&mut hasher);
+        node.x.hash(&mut hasher);
+        node.y.hash(&mut hasher);
+        node.width.hash(&mut hasher);
+        node.folded.hash(&mut hasher);
+        node.has_children.hash(&mut hasher);
+        node.parent_idx.hash(&mut hasher);
+        for link in &node.arrow_links {
+            link.hash(&mut hasher);
+        }
+    }
+    selected_id.hash(&mut hasher);
+    pan_x.hash(&mut hasher);
+    pan_y.hash(&mut hasher);
+    view_width.hash(&mut hasher);
+    view_height.hash(&mut hasher);
+    cell_width.hash(&mut hasher);
+    cell_height.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {

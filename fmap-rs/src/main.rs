@@ -169,22 +169,47 @@ fn main() -> Result<()> {
             println!("\n{}\n\nTotal: {} nodes ditampilkan.\n", outliner, total);
         }
 
-        Commands::Canvas { map_id, ascii } => {
+        Commands::Canvas {
+            map_id,
+            ascii,
+            image,
+        } => {
             let tree = storage.load_tree(&map_id)?;
-            let canvas = render_canvas(
-                &tree,
-                &CanvasOptions {
-                    max_label: 36,
-                    level_gap: 6,
-                    row_gap: 2,
-                    ascii,
-                },
-            );
+            let options = CanvasOptions {
+                max_label: 36,
+                level_gap: 6,
+                row_gap: 2,
+                ascii,
+            };
+
+            if let Some(path) = image {
+                let (width, height) = formatter::save_canvas_png(
+                    &tree,
+                    &options,
+                    None,
+                    Path::new(&path),
+                    formatter::EXPORT_IMAGE_CELL.0,
+                    formatter::EXPORT_IMAGE_CELL.1,
+                )?;
+                println!(
+                    "\n🖼️  Render grafis disimpan ke {} ({}x{} px)\n",
+                    path, width, height
+                );
+                return Ok(());
+            }
+
+            let canvas = render_canvas(&tree, &options);
             println!("\n🧠 Mindmap 2D Canvas [ID: {}]\n\n{}\n", map_id, canvas);
         }
 
-        Commands::Ui { map_id, canvas } => {
-            tui::run_interactive_tui(&storage, &map_id, canvas)?;
+        Commands::Ui {
+            map_id,
+            canvas,
+            graphics,
+            cell_size,
+        } => {
+            let cell_size = parse_cell_size(&cell_size)?;
+            tui::run_interactive_tui(&storage, &map_id, canvas, graphics, cell_size)?;
         }
 
         Commands::Search { query, map } => {
@@ -388,4 +413,42 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_cell_size(value: &str) -> Result<(u16, u16)> {
+    let normalized = value.replace(',', "x");
+    let (width, height) = normalized
+        .split_once('x')
+        .ok_or_else(|| anyhow!("Format --cell-size harus WxH, contoh: 9x18"))?;
+    let width: u16 = width
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("Lebar sel tidak valid: {}", width))?;
+    let height: u16 = height
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("Tinggi sel tidak valid: {}", height))?;
+    if width == 0 || height == 0 {
+        return Err(anyhow!("Ukuran sel harus lebih dari 0"));
+    }
+    Ok((width, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cell_size;
+
+    #[test]
+    fn parses_cell_size_formats() {
+        assert_eq!(parse_cell_size("9x18").unwrap(), (9, 18));
+        assert_eq!(parse_cell_size("10,20").unwrap(), (10, 20));
+        assert_eq!(parse_cell_size(" 8 x 16 ").unwrap(), (8, 16));
+    }
+
+    #[test]
+    fn rejects_invalid_cell_size() {
+        assert!(parse_cell_size("9").is_err());
+        assert!(parse_cell_size("0x18").is_err());
+        assert!(parse_cell_size("axb").is_err());
+    }
 }

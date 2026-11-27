@@ -1,4 +1,20 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicsMode {
+    /// Deteksi otomatis dari environment (fallback: ASCII).
+    Auto,
+    /// Paksa canvas ASCII.
+    Ascii,
+    /// Render grafis memakai blok setengah (didukung hampir semua terminal).
+    Halfblocks,
+    /// Render grafis memakai protokol sixel.
+    Sixel,
+    /// Render grafis memakai protokol kitty.
+    Kitty,
+    /// Render grafis memakai protokol iTerm2.
+    Iterm2,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -38,6 +54,12 @@ pub enum Commands {
         map_id: String,
         #[arg(long)]
         ascii: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Simpan render grafis high-resolution ke file PNG (mengabaikan --ascii)"
+        )]
+        image: Option<String>,
     },
 
     #[command(about = "Buka Interactive TUI (v = Canvas 2D)")]
@@ -45,6 +67,19 @@ pub enum Commands {
         map_id: String,
         #[arg(long, help = "Buka langsung dalam mode 2D Canvas")]
         canvas: bool,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "auto",
+            help = "Mode render canvas grafis (auto mendeteksi dari environment)"
+        )]
+        graphics: GraphicsMode,
+        #[arg(
+            long,
+            default_value = "9x18",
+            help = "Ukuran sel font WxH untuk mode grafis (contoh: 9x18)"
+        )]
+        cell_size: String,
     },
 
     #[command(about = "Pencarian teks & catatan di mindmap")]
