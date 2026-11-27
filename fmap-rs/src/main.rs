@@ -207,9 +207,10 @@ fn main() -> Result<()> {
             canvas,
             graphics,
             cell_size,
+            zoom,
         } => {
-            let cell_size = parse_cell_size(&cell_size)?;
-            tui::run_interactive_tui(&storage, &map_id, canvas, graphics, cell_size)?;
+            let cell_size = cell_size.as_deref().map(parse_cell_size).transpose()?;
+            tui::run_interactive_tui(&storage, &map_id, canvas, graphics, cell_size, zoom)?;
         }
 
         Commands::Search { query, map } => {

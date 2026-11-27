@@ -140,13 +140,23 @@ fmap ui <map_id> --canvas --graphics kitty
 fmap ui <map_id> --canvas --graphics iterm2
 fmap ui <map_id> --canvas --graphics halfblocks   # fallback blok setengah
 fmap ui <map_id> --canvas --graphics ascii        # mulai dari ASCII
+fmap ui <map_id> --canvas --graphics kitty --zoom 1.5   # mulai zoom 150%
 ```
 
-Ukuran sel font yang dipakai renderer bisa diatur lewat `--cell-size WxH`
-(default `9x18`). Di dalam TUI, tekan `g` untuk beralih antara renderer grafis
-dan ASCII kapan saja; judul panel menunjukkan protokol yang aktif. `--graphics
+Ukuran sel font yang dipakai renderer bisa diatur lewat `--cell-size WxH`.
+Default-nya dideteksi otomatis dari ukuran window terminal (lewat `TIOCGWINSZ`,
+tanpa query stdin) supaya gambar mengisi panel kiri; bila terminal tidak
+melaporkan ukuran piksel, fallback ke `9x18`. Deteksi ini penting untuk
+sixel/kitty/iTerm2 karena gambar ditempatkan dalam piksel, bukan sel karakter.
+Di dalam TUI, tekan `g` untuk beralih antara renderer grafis dan ASCII kapan
+saja; judul panel menunjukkan protokol dan level zoom yang aktif. `--graphics
 auto` (default) akan memilih grafis bila terminal terdeteksi mendukung, dan
 jatuh ke ASCII bila tidak.
+
+Di mode grafis, zoom bisa diubah langsung dengan `+`/`=` (zoom in) dan
+`-`/`_` (zoom out) dengan rentang 50%–400%; `0` mereset pan dan zoom. Zoom
+dirender ulang dari layout vektor, jadi teks dan garis tetap tajam (bukan
+sekadar memperbesar bitmap). Nilai awal bisa diberikan lewat `--zoom 0.5..4.0`.
 
 Catatan terminal:
 
@@ -165,9 +175,11 @@ TUI juga bisa dipakai untuk mengubah isi peta tanpa keluar ke CLI:
 | --- | --- |
 | `v` | Beralih Tree View ↔ 2D Canvas |
 | `g` | Beralih renderer canvas: grafis ↔ ASCII |
+| `+` / `=` | Zoom in canvas grafis |
+| `-` / `_` | Zoom out canvas grafis |
 | `←` / `↑` / `↓` / `→` | Sorot node tetangga |
 | `Space` | Lipat / buka subtree node terpilih |
-| `0` | Reset posisi pan canvas |
+| `0` | Reset posisi pan dan zoom canvas |
 | `PgUp` / `PgDn` | Scroll panel detail node |
 | `c` | Tambah child di bawah node terpilih |
 | `s` | Tambah sibling (saudara) dari node terpilih |

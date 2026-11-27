@@ -51,6 +51,11 @@ const DEPTH_BORDERS: [Color; 6] = [
 /// cells. The returned image is exactly `view_width * cell_width` by
 /// `view_height * cell_height` pixels so it can be blitted 1:1 into a terminal
 /// area of `view_width` x `view_height` cells.
+///
+/// `zoom` scales the canvas content inside that fixed pixel area. Because the
+/// canvas is re-rendered from its vector layout (instead of scaling a bitmap),
+/// zooming in stays sharp. A zoom of `1.0` means one canvas cell maps to one
+/// terminal cell.
 #[allow(clippy::too_many_arguments)]
 pub fn render_canvas_image(
     canvas: &CanvasData,
@@ -61,20 +66,26 @@ pub fn render_canvas_image(
     view_height: usize,
     cell_width: u16,
     cell_height: u16,
+    zoom: f32,
 ) -> RgbaImage {
-    let cw = cell_width.max(1) as usize;
-    let ch = cell_height.max(1) as usize;
-    let width = (view_width * cw).max(1) as u32;
-    let height = (view_height * ch).max(1) as u32;
+    let base_cw = cell_width.max(1) as usize;
+    let base_ch = cell_height.max(1) as usize;
+    let width = (view_width * base_cw).max(1) as u32;
+    let height = (view_height * base_ch).max(1) as u32;
+
+    // Clamp defensively: callers should already keep zoom in a sane range.
+    let zoom = zoom.clamp(0.25, 8.0);
+    let cw = base_cw as f32 * zoom;
+    let ch = base_ch as f32 * zoom;
 
     let mut img = RgbaImage::from_pixel(width, height, Rgba(BG));
 
     // Small breathing room so the root card (at cell 0,0) and its selection
     // glow are not clipped by the edge of the image.
-    let margin_x = (cw as f32 * 0.55).max(6.0);
-    let margin_y = (ch as f32 * 0.22).max(4.0);
-    let offset_x = (pan_x * cw) as f32 - margin_x;
-    let offset_y = (pan_y * ch) as f32 - margin_y;
+    let margin_x = (cw * 0.55).max(6.0);
+    let margin_y = (ch * 0.22).max(4.0);
+    let offset_x = pan_x as f32 * cw - margin_x;
+    let offset_y = pan_y as f32 * ch - margin_y;
 
     // Edges first, nodes on top so the cards cover the connector endpoints.
     for (pidx, parent) in canvas.nodes.iter().enumerate() {
@@ -118,7 +129,17 @@ pub fn save_canvas_png(
     let canvas = super::map_canvas::compute_canvas(root, options);
     // One extra cell compensates for the internal margin so nothing is cut off.
     let (vw, vh) = (canvas.width.max(1) + 1, canvas.height.max(1) + 1);
-    let img = render_canvas_image(&canvas, selected_id, 0, 0, vw, vh, cell_width, cell_height);
+    let img = render_canvas_image(
+        &canvas,
+        selected_id,
+        0,
+        0,
+        vw,
+        vh,
+        cell_width,
+        cell_height,
+        1.0,
+    );
     img.save(path)?;
     Ok((img.width(), img.height()))
 }
@@ -130,14 +151,14 @@ fn draw_tree_edge(
     child: &CanvasNodeInfo,
     offset_x: f32,
     offset_y: f32,
-    cw: usize,
-    ch: usize,
+    cw: f32,
+    ch: f32,
     color: Color,
 ) {
-    let px = (parent.x + parent.width) as f32 * cw as f32 - offset_x;
-    let py = parent.y as f32 * ch as f32 + ch as f32 / 2.0 - offset_y;
-    let cx = child.x as f32 * cw as f32 - offset_x;
-    let cy = child.y as f32 * ch as f32 + ch as f32 / 2.0 - offset_y;
+    let px = (parent.x + parent.width) as f32 * cw - offset_x;
+    let py = parent.y as f32 * ch + ch / 2.0 - offset_y;
+    let cx = child.x as f32 * cw - offset_x;
+    let cy = child.y as f32 * ch + ch / 2.0 - offset_y;
 
     let gap = cx - px;
     let control = (gap * 0.45).max(2.0);
@@ -146,7 +167,7 @@ fn draw_tree_edge(
     let p2 = (cx - control, cy);
     let p3 = (cx, cy);
 
-    let thickness = (ch as f32 * 0.07).max(1.0);
+    let thickness = (ch * 0.07).max(1.0);
     draw_bezier(img, p0, p1, p2, p3, thickness, color, 255);
 }
 
@@ -155,8 +176,8 @@ fn draw_arrow_links(
     canvas: &CanvasData,
     offset_x: f32,
     offset_y: f32,
-    cw: usize,
-    ch: usize,
+    cw: f32,
+    ch: f32,
 ) {
     let index: std::collections::HashMap<&str, usize> = canvas
         .nodes
@@ -165,8 +186,8 @@ fn draw_arrow_links(
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
 
-    let thickness = (ch as f32 * 0.075).max(1.2);
-    let head_len = (ch as f32 * 0.45).max(4.0);
+    let thickness = (ch * 0.075).max(1.2);
+    let head_len = (ch * 0.45).max(4.0);
     let head_width = head_len * 0.55;
 
     for (src_idx, src) in canvas.nodes.iter().enumerate() {
@@ -179,12 +200,12 @@ fn draw_arrow_links(
             }
             let dst = &canvas.nodes[dst_idx];
 
-            let src_right = (src.x + src.width) as f32 * cw as f32 - offset_x;
-            let src_left = src.x as f32 * cw as f32 - offset_x;
-            let dst_right = (dst.x + dst.width) as f32 * cw as f32 - offset_x;
-            let dst_left = dst.x as f32 * cw as f32 - offset_x;
-            let sy = src.y as f32 * ch as f32 + ch as f32 / 2.0 - offset_y;
-            let ty = dst.y as f32 * ch as f32 + ch as f32 / 2.0 - offset_y;
+            let src_right = (src.x + src.width) as f32 * cw - offset_x;
+            let src_left = src.x as f32 * cw - offset_x;
+            let dst_right = (dst.x + dst.width) as f32 * cw - offset_x;
+            let dst_left = dst.x as f32 * cw - offset_x;
+            let sy = src.y as f32 * ch + ch / 2.0 - offset_y;
+            let ty = dst.y as f32 * ch + ch / 2.0 - offset_y;
 
             let (p0, p1, p2, p3, tip_dir) = if dst.x >= src.x + src.width {
                 // Target on the right.
@@ -208,7 +229,7 @@ fn draw_arrow_links(
                 )
             } else if sy != ty {
                 // Same column: loop out to the right and come back.
-                let corridor = src_right.max(dst_right) + (cw as f32 * 2.0).max(6.0);
+                let corridor = src_right.max(dst_right) + (cw * 2.0).max(6.0);
                 (
                     (src_right, sy),
                     (corridor, sy),
@@ -250,13 +271,13 @@ fn draw_node(
     font: &FontRef<'static>,
     offset_x: f32,
     offset_y: f32,
-    cw: usize,
-    ch: usize,
+    cw: f32,
+    ch: f32,
 ) {
-    let left = node.x as f32 * cw as f32 - offset_x;
-    let top = node.y as f32 * ch as f32 + ch as f32 * 0.11 - offset_y;
-    let width = node.width as f32 * cw as f32;
-    let height = (ch as f32 * 0.78).max(6.0);
+    let left = node.x as f32 * cw - offset_x;
+    let top = node.y as f32 * ch + ch * 0.11 - offset_y;
+    let width = node.width as f32 * cw;
+    let height = (ch * 0.78).max(6.0);
 
     if left + width < 0.0
         || top + height < 0.0
@@ -266,11 +287,11 @@ fn draw_node(
         return;
     }
 
-    let radius = (height * 0.32).min(cw as f32 * 0.9).max(2.0);
+    let radius = (height * 0.32).min(cw * 0.9).max(2.0);
     let border_width = if selected {
-        (ch as f32 * 0.11).max(2.0)
+        (ch * 0.11).max(2.0)
     } else {
-        (ch as f32 * 0.06).max(1.0)
+        (ch * 0.06).max(1.0)
     };
 
     let border = if selected {
@@ -323,11 +344,11 @@ fn draw_node(
     );
 
     // Label text.
-    let font_size = (cw as f32 / MONO_ADVANCE).min(height * 0.82).max(4.0);
+    let font_size = (cw / MONO_ADVANCE).min(height * 0.82).max(4.0);
     let text_color = if node.depth == 0 { TEXT_ROOT } else { TEXT };
-    let padding = (cw as f32 * 0.55).max(3.0);
+    let padding = (cw * 0.55).max(3.0);
     let marker_space = if node.has_children {
-        (cw as f32 * 1.7).max(8.0)
+        (cw * 1.7).max(8.0)
     } else {
         0.0
     };
@@ -350,7 +371,7 @@ fn draw_node(
 
     // Fold marker as a crisp geometric triangle.
     if node.has_children {
-        let size = (ch as f32 * 0.22).max(2.5);
+        let size = (ch * 0.22).max(2.5);
         let mx = left + width - padding - size * 0.5;
         let my = top + height / 2.0;
         if node.folded {
@@ -716,6 +737,7 @@ mod tests {
             canvas.height.max(1),
             8,
             16,
+            1.0,
         );
         assert_eq!(img.width(), canvas.width.max(1) as u32 * 8);
         assert_eq!(img.height(), canvas.height.max(1) as u32 * 16);
@@ -725,9 +747,19 @@ mod tests {
     #[test]
     fn selection_changes_the_image() {
         let canvas = compute_canvas(&sample_tree(), &opts());
-        let plain = render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16);
-        let selected =
-            render_canvas_image(&canvas, Some("a"), 0, 0, canvas.width, canvas.height, 8, 16);
+        let plain =
+            render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16, 1.0);
+        let selected = render_canvas_image(
+            &canvas,
+            Some("a"),
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+            8,
+            16,
+            1.0,
+        );
         assert_ne!(plain.as_raw(), selected.as_raw());
     }
 
@@ -735,9 +767,21 @@ mod tests {
     fn panning_changes_the_image() {
         let canvas = compute_canvas(&sample_tree(), &opts());
         let at_origin =
-            render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16);
-        let panned = render_canvas_image(&canvas, None, 2, 1, canvas.width, canvas.height, 8, 16);
+            render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16, 1.0);
+        let panned =
+            render_canvas_image(&canvas, None, 2, 1, canvas.width, canvas.height, 8, 16, 1.0);
         assert_ne!(at_origin.as_raw(), panned.as_raw());
+    }
+
+    #[test]
+    fn zoom_changes_content_but_not_image_size() {
+        let canvas = compute_canvas(&sample_tree(), &opts());
+        let normal =
+            render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16, 1.0);
+        let zoomed =
+            render_canvas_image(&canvas, None, 0, 0, canvas.width, canvas.height, 8, 16, 2.0);
+        assert_ne!(normal.as_raw(), zoomed.as_raw());
+        assert_eq!(normal.dimensions(), zoomed.dimensions());
     }
 
     #[test]
@@ -750,7 +794,7 @@ mod tests {
             arrow_mask: Vec::new(),
             ascii: false,
         };
-        let img = render_canvas_image(&canvas, None, 0, 0, 1, 1, 8, 16);
+        let img = render_canvas_image(&canvas, None, 0, 0, 1, 1, 8, 16, 1.0);
         assert_eq!((img.width(), img.height()), (8, 16));
     }
 
@@ -763,7 +807,7 @@ mod tests {
         use ratatui_image::{protocol::StatefulProtocol, Resize, StatefulImage};
 
         let canvas = compute_canvas(&sample_tree(), &opts());
-        let img = render_canvas_image(&canvas, Some("a"), 0, 0, 40, 12, 8, 16);
+        let img = render_canvas_image(&canvas, Some("a"), 0, 0, 40, 12, 8, 16, 1.0);
 
         let mut picker = Picker::from_fontsize((8, 16));
         picker.set_protocol_type(ProtocolType::Halfblocks);

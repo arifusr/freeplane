@@ -76,10 +76,16 @@ pub enum Commands {
         graphics: GraphicsMode,
         #[arg(
             long,
-            default_value = "9x18",
-            help = "Ukuran sel font WxH untuk mode grafis (contoh: 9x18)"
+            value_name = "WxH",
+            help = "Ukuran sel font WxH untuk mode grafis (default: deteksi otomatis, fallback 9x18)"
         )]
-        cell_size: String,
+        cell_size: Option<String>,
+        #[arg(
+            long,
+            default_value_t = 1.0,
+            help = "Zoom awal canvas grafis (0.5–4.0; 1.0 = normal)"
+        )]
+        zoom: f32,
     },
 
     #[command(about = "Pencarian teks & catatan di mindmap")]

@@ -1,7 +1,7 @@
 use crate::cli::GraphicsMode;
 use crate::formatter::{
     compute_canvas, find_canvas_neighbor, render_canvas_image, CanvasData, CanvasNodeInfo,
-    CanvasOptions,
+    CanvasOptions, DEFAULT_IMAGE_CELL,
 };
 use crate::model::TreeNode;
 use crate::storage::LadybugStorage;
@@ -31,6 +31,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::time::{Duration, Instant};
+
+/// Zoom limits and step for the graphical canvas (1.0 = one canvas cell per
+/// terminal cell).
+const ZOOM_MIN: f32 = 0.5;
+const ZOOM_MAX: f32 = 4.0;
+const ZOOM_STEP: f32 = 0.25;
 
 #[derive(Clone, Debug)]
 struct FlatItem<'a> {
@@ -178,7 +184,8 @@ pub fn run_interactive_tui(
     map_id: &str,
     start_canvas: bool,
     graphics_mode: GraphicsMode,
-    cell_size: (u16, u16),
+    cell_size: Option<(u16, u16)>,
+    zoom: f32,
 ) -> Result<()> {
     let mut tree = storage.load_tree(map_id)?;
 
@@ -186,6 +193,11 @@ pub fn run_interactive_tui(
     // can leak a reader thread that swallows the first keypress, so detection
     // is environment based and can be overridden with `--graphics`.
     let protocol = resolve_graphics_protocol(graphics_mode);
+    // Use the real cell pixel size when the terminal reports it so the image
+    // fills the panel instead of leaving a margin. `--cell-size` still wins.
+    let cell_size = cell_size
+        .or_else(detect_terminal_cell_size)
+        .unwrap_or(DEFAULT_IMAGE_CELL);
     let mut picker = Picker::from_fontsize((cell_size.0.max(1), cell_size.1.max(1)));
     picker.set_protocol_type(protocol);
     let start_graphics = match graphics_mode {
@@ -212,6 +224,7 @@ pub fn run_interactive_tui(
             picker,
             start_graphics,
             ascii_hint,
+            initial_zoom: zoom,
         },
     );
 
@@ -231,6 +244,7 @@ struct GraphicsSetup {
     picker: Picker,
     start_graphics: bool,
     ascii_hint: bool,
+    initial_zoom: f32,
 }
 
 fn tui_loop<B: ratatui::backend::Backend>(
@@ -245,6 +259,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
         picker,
         start_graphics,
         ascii_hint,
+        initial_zoom,
     } = graphics;
     let graphics_protocol = picker.protocol_type();
     let (cell_width, cell_height) = {
@@ -267,6 +282,11 @@ fn tui_loop<B: ratatui::backend::Backend>(
     };
     let mut pan_x: usize = 0;
     let mut pan_y: usize = 0;
+    let mut zoom: f32 = if initial_zoom.is_finite() {
+        initial_zoom.clamp(ZOOM_MIN, ZOOM_MAX)
+    } else {
+        1.0
+    };
     // Cached encoded image; invalidated when the tree, selection or viewport changes.
     let mut image_cache: Option<(u64, StatefulProtocol)> = None;
 
@@ -326,22 +346,34 @@ fn tui_loop<B: ratatui::backend::Backend>(
 
             // Auto-pan viewport jika dalam mode 2D Canvas agar node aktif selalu terlihat
             if is_canvas_mode {
+                // Saat zoom grafis aktif, satu sel terminal menampung lebih dari
+                // satu sel canvas, jadi viewport logis mengecil.
+                let view_cells_w = if is_graphics_mode {
+                    ((vw as f32 / zoom).floor() as usize).max(1)
+                } else {
+                    vw
+                };
+                let view_cells_h = if is_graphics_mode {
+                    ((vh as f32 / zoom).floor() as usize).max(1)
+                } else {
+                    vh
+                };
                 if let Some(sn) = canvas_data.nodes.iter().find(|n| n.id == selected_id) {
                     let sx = sn.x;
                     let sw = sn.width;
                     let sy = sn.y;
 
-                    if sx < pan_x + 2 {
+                    // Jika node lebih lebar dari viewport (umum saat zoom in),
+                    // tampilkan sisi kirinya agar label tetap terbaca.
+                    if sx < pan_x + 2 || sw + 4 > view_cells_w {
                         pan_x = sx.saturating_sub(2);
-                    }
-                    if sx + sw + 2 > pan_x + vw {
-                        pan_x = (sx + sw + 2).saturating_sub(vw);
+                    } else if sx + sw + 2 > pan_x + view_cells_w {
+                        pan_x = (sx + sw + 2).saturating_sub(view_cells_w);
                     }
                     if sy < pan_y {
                         pan_y = sy.saturating_sub(1);
-                    }
-                    if sy + 2 > pan_y + vh {
-                        pan_y = (sy + 2).saturating_sub(vh);
+                    } else if sy + 2 > pan_y + view_cells_h {
+                        pan_y = (sy + 2).saturating_sub(view_cells_h);
                     }
                 }
             }
@@ -353,9 +385,14 @@ fn tui_loop<B: ratatui::backend::Backend>(
                 } else {
                     "ASCII"
                 };
+                let zoom_badge = if is_graphics_mode {
+                    format!(" zoom={:.0}%", zoom * 100.0)
+                } else {
+                    String::new()
+                };
                 format!(
-                    " 🧠 Mindmap 2D Canvas [{}] [Peta: {}] (x={}, y={}) ",
-                    renderer, map_id, pan_x, pan_y
+                    " 🧠 Mindmap 2D Canvas [{}{}] [Peta: {}] (x={}, y={}) ",
+                    renderer, zoom_badge, map_id, pan_x, pan_y
                 )
             } else {
                 format!(" 🌳 Outliner Tree View [Peta: {}] ", map_id)
@@ -391,6 +428,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             inner.height as usize,
                             cell_width,
                             cell_height,
+                            zoom,
                         );
                         if image_cache.as_ref().map(|(cached, _)| *cached) != Some(key) {
                             let img = render_canvas_image(
@@ -402,6 +440,7 @@ fn tui_loop<B: ratatui::backend::Backend>(
                                 inner.height as usize,
                                 cell_width,
                                 cell_height,
+                                zoom,
                             );
                             let protocol =
                                 picker.new_resize_protocol(image::DynamicImage::ImageRgba8(img));
@@ -641,8 +680,10 @@ fn tui_loop<B: ratatui::backend::Backend>(
                     Span::raw(" Info  "),
                     key_hint("[g]"),
                     Span::raw(" Grafis/ASCII  "),
+                    key_hint("[+/-]"),
+                    Span::raw(" Zoom  "),
                     key_hint("[0]"),
-                    Span::raw(" Reset Pan"),
+                    Span::raw(" Reset"),
                 ])
             } else {
                 Line::from(vec![
@@ -985,9 +1026,31 @@ fn tui_loop<B: ratatui::backend::Backend>(
                             ));
                         }
                     }
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        if is_canvas_mode && is_graphics_mode {
+                            zoom = (zoom + ZOOM_STEP).min(ZOOM_MAX);
+                            status = Some(status_ok(format!("Zoom in: {:.0}%", zoom * 100.0)));
+                        } else if is_canvas_mode {
+                            status = Some(status_ok(
+                                "Zoom hanya tersedia di canvas grafis. Tekan g untuk mengaktifkannya.",
+                            ));
+                        }
+                    }
+                    KeyCode::Char('-') | KeyCode::Char('_') => {
+                        if is_canvas_mode && is_graphics_mode {
+                            zoom = (zoom - ZOOM_STEP).max(ZOOM_MIN);
+                            status = Some(status_ok(format!("Zoom out: {:.0}%", zoom * 100.0)));
+                        } else if is_canvas_mode {
+                            status = Some(status_ok(
+                                "Zoom hanya tersedia di canvas grafis. Tekan g untuk mengaktifkannya.",
+                            ));
+                        }
+                    }
                     KeyCode::Char('0') => {
                         pan_x = 0;
                         pan_y = 0;
+                        zoom = 1.0;
+                        status = Some(status_ok("Posisi pan dan zoom direset."));
                     }
                     KeyCode::Char('r') => {
                         prompt = Some(PromptState {
@@ -1223,6 +1286,29 @@ fn detect_graphics_protocol_from_env() -> ProtocolType {
     ProtocolType::Halfblocks
 }
 
+/// Best-effort cell pixel size from the terminal's window metrics.
+///
+/// `TIOCGWINSZ` reports the text area in pixels on most terminals, which lets
+/// the image match the panel exactly. No stdin query is involved, so this does
+/// not risk swallowing a keypress.
+fn detect_terminal_cell_size() -> Option<(u16, u16)> {
+    let ws = crossterm::terminal::window_size().ok()?;
+    cell_size_from_pixels(ws.columns, ws.rows, ws.width, ws.height)
+}
+
+fn cell_size_from_pixels(columns: u16, rows: u16, width: u16, height: u16) -> Option<(u16, u16)> {
+    if columns == 0 || rows == 0 || width == 0 || height == 0 {
+        return None;
+    }
+    let cw = (width as u32 + columns as u32 / 2) / columns as u32;
+    let ch = (height as u32 + rows as u32 / 2) / rows as u32;
+    if (4..=64).contains(&cw) && (6..=128).contains(&ch) {
+        Some((cw as u16, ch as u16))
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn canvas_image_key(
     canvas: &CanvasData,
@@ -1233,6 +1319,7 @@ fn canvas_image_key(
     view_height: usize,
     cell_width: u16,
     cell_height: u16,
+    zoom: f32,
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
     canvas.width.hash(&mut hasher);
@@ -1258,6 +1345,7 @@ fn canvas_image_key(
     view_height.hash(&mut hasher);
     cell_width.hash(&mut hasher);
     cell_height.hash(&mut hasher);
+    zoom.to_bits().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1772,5 +1860,19 @@ mod tests {
         input.insert_char('é');
 
         assert_eq!(input.as_str(), "éeta🗺");
+    }
+
+    #[test]
+    fn derives_cell_size_from_terminal_pixels() {
+        assert_eq!(cell_size_from_pixels(120, 40, 1920, 1280), Some((16, 32)));
+        assert_eq!(cell_size_from_pixels(80, 24, 800, 480), Some((10, 20)));
+    }
+
+    #[test]
+    fn rejects_unreliable_cell_size_metrics() {
+        assert_eq!(cell_size_from_pixels(0, 40, 1920, 1280), None);
+        assert_eq!(cell_size_from_pixels(120, 40, 0, 0), None);
+        assert_eq!(cell_size_from_pixels(120, 40, 120, 40), None);
+        assert_eq!(cell_size_from_pixels(1, 1, 65535, 65535), None);
     }
 }
